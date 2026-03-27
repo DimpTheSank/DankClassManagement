@@ -59,19 +59,19 @@ def clean_nan(val):
     if pd.isna(val) or str(val).lower() == "nan" or str(val).strip() == "": return " " 
     return str(val).strip()
 
-# --- 3. KHỞI TẠO FIREBASE ---
+# --- 3. KHỞI TẠO FIREBASE (FIX LỖI NAMEERROR) ---
 if not firebase_admin._apps:
     if "firebase" in st.secrets:
-        # Khi chạy trên Streamlit Cloud (đọc từ Secrets)
         fb_dict = dict(st.secrets["firebase"])
-        # Lưu ý: Một số trường hợp cần xử lý ký tự xuống dòng của private_key
         if "private_key" in fb_dict:
             fb_dict["private_key"] = fb_dict["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(fb_dict)
     else:
-        # Khi chạy máy local (đọc từ file file json)
         cred = credentials.Certificate('data/serviceAccountKey.json')
     firebase_admin.initialize_app(cred)
+
+# QUAN TRỌNG: Phải có dòng này ở ngoài để mọi hàm đều dùng được db
+db = firestore.client() 
 
 # --- 4. QUẢN LÝ SESSION ---
 if 'user' not in st.session_state: st.session_state.user = None
@@ -83,17 +83,18 @@ def logout():
     for key in list(st.session_state.keys()): del st.session_state[key]
     st.rerun()
 
-# CALLBACK SỬA LỖI NHẤN 2 LẦN
+# CALLBACK SỬA LỖI NHẤN 2 LẦN (Cập nhật logic ép buộc nạp dữ liệu)
 def start_lesson_callback(ex, ex_id):
     try:
-        df = pd.read_excel(get_drive_url(ex['excel_link']))
+        url = get_drive_url(ex['excel_link'])
+        df = pd.read_excel(url)
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
         st.session_state.current_ex_info = ex
-        st.session_state.current_ex_id = ex_id # Lưu ID để check quyền Review
+        st.session_state.current_ex_id = ex_id 
         st.session_state.view_mode = 'quiz'
     except Exception as e:
-        st.error(f"Lỗi nạp bài: {e}")
+        st.session_state.error_msg = f"Lỗi nạp bài: {e}"
 
 # --- 5. CÁC TRANG CHỨC NĂNG ---
 
@@ -121,7 +122,6 @@ def teacher_page():
             assigned = st.multiselect("Giao cho học sinh:", students)
             if st.button("🚀 Đăng bài", use_container_width=True):
                 if title and link and assigned:
-                    # Tạo quyền review mặc định là False cho từng học sinh
                     db.collection('exercises').add({
                         'title': title, 'type': ex_type, 'excel_link': link, 
                         'assigned_to': assigned, 'created_at': firestore.SERVER_TIMESTAMP,
@@ -137,29 +137,25 @@ def teacher_page():
             for doc in student_exs:
                 ex_data, ex_id = doc.to_dict(), doc.id
                 with st.expander(f"📝 {ex_data['title']} ({ex_data['type']})"):
-                    c_info, c_rev, c_del = st.columns([2, 1, 1])
-                    c_info.write(f"Ngày giao: {ex_data.get('created_at', 'N/A')}")
+                    c_info, c_toggle, c_del = st.columns([2, 2, 1])
+                    c_info.write(f"Giao ngày: {ex_data.get('created_at', 'N/A')}")
                     
-                    # TOGGLE CHO PHÉP REVIEW
+                    # NÚT TOGGLE QUYỀN REVIEW
                     perms = ex_data.get('review_permissions', {})
-                    current_perm = perms.get(selected_st, False)
-                    if c_rev.toggle("Cho phép Review", value=current_perm, key=f"rev_{ex_id}_{selected_st}"):
-                        if not current_perm:
-                            perms[selected_st] = True
-                            db.collection('exercises').document(ex_id).update({'review_permissions': perms})
-                    else:
-                        if current_perm:
-                            perms[selected_st] = False
-                            db.collection('exercises').document(ex_id).update({'review_permissions': perms})
+                    current_status = perms.get(selected_st, False)
+                    new_status = c_toggle.toggle("Cho phép Review", value=current_status, key=f"t_{ex_id}_{selected_st}")
+                    
+                    if new_status != current_status:
+                        perms[selected_st] = new_status
+                        db.collection('exercises').document(ex_id).update({'review_permissions': perms})
+                        st.rerun()
 
                     with c_del:
-                        with st.popover("🗑️ Xóa"):
-                            if st.button("Xác nhận xóa", key=f"del_{ex_id}_{selected_st}"):
-                                doc_ref = db.collection('exercises').document(ex_id)
-                                new_assigned = [e for e in ex_data['assigned_to'] if e != selected_st]
-                                if not new_assigned: doc_ref.delete()
-                                else: doc_ref.update({'assigned_to': new_assigned})
-                                st.rerun()
+                        if st.button("🗑️ Xóa", key=f"del_{ex_id}_{selected_st}"):
+                            new_as = [e for e in ex_data['assigned_to'] if e != selected_st]
+                            if not new_as: db.collection('exercises').document(ex_id).delete()
+                            else: db.collection('exercises').document(ex_id).update({'assigned_to': new_as})
+                            st.rerun()
 
     with tab_stats:
         st.subheader("📈 Dashboard Phân tích Lớp học")
@@ -235,6 +231,7 @@ def teacher_page():
                                     ck = str(row.get('correct_ans')).strip().upper()
                                     st.success(f"✅ Đáp án: {ck}. {clean_nan(row.get(f'opt_{ck.lower()}'))}")
                                     st.error(f"❌ Các bạn đang sai: {', '.join(wrong_stats[sel_idx])}")
+                    else: st.info("Chưa có dữ liệu.")
 
 def student_page():
     st.sidebar.button("Đăng xuất", on_click=logout)
@@ -260,13 +257,13 @@ def student_page():
             
             with st.container(border=True):
                 c1, c2 = st.columns([4, 1])
-                c1.subheader(f"{ex['type']} - {ex['title']}")
-                c1.write(f"🔢 Lần làm: `{len(history)}` | {status}")
-                # DÙNG CALLBACK ĐỂ FIX LỖI NHẤN 2 LẦN
-                c2.button("Vào học ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id))
+                with c1:
+                    st.subheader(f"{ex['type']} - {ex['title']}")
+                    st.markdown(f"🔢 Lần làm: `{len(history)}` | {status}")
+                with c2: st.button("Vào học ➔", key=f"ex_{doc.id}", on_click=start_lesson_callback, args=(ex, ex_id))
 
     elif st.session_state.view_mode == 'quiz':
-        st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
+        st.title(f"✍️ {st.session_state.current_ex_info['title']}")
         if st.button("⬅ Thoát"): st.session_state.view_mode = 'list'; st.rerun()
         with st.form("quiz_form"):
             df, answers, last_audio = st.session_state.current_df, {}, None
@@ -274,7 +271,8 @@ def student_page():
             for _, group_df in df.groupby('group'):
                 first = group_df.iloc[0]
                 if 'audio' in df.columns and pd.notna(first.get('audio')):
-                    display_drive_audio(str(first.get('audio')))
+                    au = str(first.get('audio')).strip()
+                    if au != last_audio: display_drive_audio(au); last_audio = au
                 ctx = clean_nan(first.get('context'))
                 if ctx.lower() in [" ", "nan", "none"]:
                     for i, r in group_df.iterrows():
@@ -286,11 +284,13 @@ def student_page():
                     st.markdown("---")
                     l_col, r_col = st.columns([1, 1])
                     with l_col:
+                        st.subheader("📖 Ngữ liệu")
                         with st.container(height=650):
                             for p in ctx.split(";;"):
                                 if p.strip().startswith("http"): display_drive_image(p.strip())
                                 else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
                     with r_col:
+                        st.subheader("❓ Câu hỏi")
                         with st.container(height=650):
                             for i, r in group_df.iterrows():
                                 st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
@@ -332,6 +332,6 @@ def student_page():
             st.divider()
         if st.button("XONG"): st.session_state.view_mode = 'list'; st.rerun()
 
-# --- 6. ĐIỀU HƯỚNG CHÍNH ---
+# --- 6. ĐIỀU HƯỚNG ---
 if st.session_state.user is None: login_page()
 else: teacher_page() if st.session_state.user.get('role') == 'teacher' else student_page()
