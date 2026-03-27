@@ -61,11 +61,17 @@ def clean_nan(val):
 
 # --- 3. KHỞI TẠO FIREBASE ---
 if not firebase_admin._apps:
-    try:
+    if "firebase" in st.secrets:
+        # Khi chạy trên Streamlit Cloud (đọc từ Secrets)
+        fb_dict = dict(st.secrets["firebase"])
+        # Lưu ý: Một số trường hợp cần xử lý ký tự xuống dòng của private_key
+        if "private_key" in fb_dict:
+            fb_dict["private_key"] = fb_dict["private_key"].replace("\\n", "\n")
+        cred = credentials.Certificate(fb_dict)
+    else:
+        # Khi chạy máy local (đọc từ file file json)
         cred = credentials.Certificate('data/serviceAccountKey.json')
-        firebase_admin.initialize_app(cred)
-    except: st.error("Lỗi: Kiểm tra file serviceAccountKey.json trong thư mục data.")
-db = firestore.client()
+    firebase_admin.initialize_app(cred)
 
 # --- 4. QUẢN LÝ SESSION ---
 if 'user' not in st.session_state: st.session_state.user = None
