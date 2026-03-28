@@ -21,17 +21,18 @@ st.markdown("""
         padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         margin-bottom: 15px; color: #333;
     }
-    .correct-label { color: #28a745; font-weight: bold; background-color: #e8f5e9; padding: 2px 8px; border-radius: 5px; }
-    .wrong-label { color: #dc3545; font-weight: bold; background-color: #ffebee; padding: 2px 8px; border-radius: 5px; }
+    .correct-box { border: 2px solid #28a745; background-color: #e8f5e9; padding: 10px; border-radius: 10px; margin-bottom: 5px; }
+    .wrong-box { border: 2px solid #dc3545; background-color: #ffebee; padding: 10px; border-radius: 10px; margin-bottom: 5px; }
+    .normal-box { border: 1px solid #ddd; padding: 10px; border-radius: 10px; margin-bottom: 5px; color: #666; }
+    
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
 
     @media (max-width: 768px) {
         .context-display { font-size: 19px !important; }
-        .stMarkdown p, .stRadio label { font-size: 19px !important; }
-        div.stButton > button { height: 65px; font-size: 18px !important; margin-bottom: 10px; }
+        .stMarkdown p { font-size: 19px !important; }
+        div.stButton > button { height: 60px; font-size: 18px !important; margin-bottom: 10px; }
     }
 
-    /* Chống menu nhấn giữ trên ảnh */
     img {
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
@@ -86,7 +87,6 @@ db = firestore.client()
 if 'user' not in st.session_state: st.session_state.user = None
 if 'view_mode' not in st.session_state: st.session_state.view_mode = 'list'
 if 'current_df' not in st.session_state: st.session_state.current_df = None
-if 'selected_ex' not in st.session_state: st.session_state.selected_ex = None
 if 'user_answers' not in st.session_state: st.session_state.user_answers = {}
 
 def logout():
@@ -108,7 +108,6 @@ def start_review_direct_callback(ex, history):
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
         latest_sub = max(history, key=lambda x: x['submitted_at'])
-        # Chuyển keys sang int để khớp với index của dataframe
         st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
         st.session_state.view_mode = 'review'
     except: st.error("Lỗi nạp dữ liệu Review.")
@@ -133,9 +132,9 @@ def login_page():
 def teacher_page():
     st.sidebar.button("Đăng xuất", on_click=logout)
     st.title("👨‍🏫 Quản lý Học viên")
-    tab_assign, tab_manage, tab_stats = st.tabs(["📤 Giao bài", "👥 Quản lý", "📊 Thống kê"])
-
-    with tab_assign:
+    t1, t2, t3 = st.tabs(["📤 Giao bài", "👥 Quản lý", "📊 Thống kê"])
+    # (Phần code tab_assign, tab_manage, tab_stats giữ nguyên như bản trước của bạn)
+    with t1:
         with st.expander("Giao bài tập mới", expanded=True):
             students = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
             title, link = st.text_input("Tiêu đề"), st.text_input("Link Excel")
@@ -144,8 +143,7 @@ def teacher_page():
             if st.button("🚀 Đăng bài", use_container_width=True):
                 db.collection('exercises').add({'title': title, 'type': ex_type, 'excel_link': link, 'assigned_to': assigned, 'created_at': firestore.SERVER_TIMESTAMP, 'review_permissions': {e: False for e in assigned}})
                 st.success("Đã đăng bài!")
-
-    with tab_manage:
+    with t2:
         all_st = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
         sel_st = st.selectbox("Chọn học sinh:", ["-- Chọn --"] + all_st)
         if sel_st != "-- Chọn --":
@@ -167,9 +165,7 @@ def teacher_page():
                         if not new_a: db.collection('exercises').document(ex_id).delete()
                         else: db.collection('exercises').document(ex_id).update({'assigned_to': new_a})
                         st.rerun()
-
-    with tab_stats:
-        # Giữ nguyên logic Dashboard split 2 đồ thị của bạn
+    with t3:
         chosen = st.multiselect("Chọn nhóm học sinh:", all_st)
         if chosen:
             student_ex_lists = []
@@ -307,26 +303,47 @@ def student_page():
         for _, group_df in df.groupby('group'):
             first = group_df.iloc[0]
             ctx = clean_nan(first.get('context'))
+            
+            # --- CẤU TRÚC SPLIT TRONG REVIEW ---
             if ctx.lower() not in [" ", "nan", "none"]:
                 st.markdown("---")
-                for p in ctx.split(";;"):
-                    if p.strip().startswith("http"): display_drive_image(p.strip())
-                    else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
-            for i, r in group_df.iterrows():
-                st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
-                u_ans = st.session_state.user_answers.get(i)
-                ck_letter = str(r.get('correct_ans')).strip().upper()
-                opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
-                for let, txt in opts.items():
-                    if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
-                    is_correct = (let == ck_letter)
-                    is_mine = (txt == u_ans)
-                    if is_correct and is_mine: st.markdown(f"✅ **{let}. {txt}** *(Bạn đã chọn đúng)*")
-                    elif is_correct: st.markdown(f"🟢 **{let}. {txt}** *(Đáp án đúng)*")
-                    elif is_mine: st.markdown(f"❌ **{let}. {txt}** *(Bạn đã chọn sai)*")
-                    else: st.write(f"{let}. {txt}")
-                st.write("---")
-        st.button("XONG", on_click=lambda: st.session_state.update({"view_mode":"list"}))
+                l_rev, r_rev = st.columns([1, 1])
+                with l_rev:
+                    with st.container(height=650):
+                        for p in ctx.split(";;"):
+                            if p.strip().startswith("http"): display_drive_image(p.strip())
+                            else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
+                with r_rev:
+                    with st.container(height=650):
+                        for i, r in group_df.iterrows():
+                            st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
+                            u_ans = st.session_state.user_answers.get(i)
+                            ck_letter = str(r.get('correct_ans')).strip().upper()
+                            opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
+                            for let, txt in opts.items():
+                                if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
+                                is_correct = (let == ck_letter)
+                                is_mine = (txt == u_ans)
+                                if is_correct and is_mine: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn đã chọn đúng)</div>', unsafe_allow_html=True)
+                                elif is_correct: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
+                                elif is_mine: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn đã chọn sai)</div>', unsafe_allow_html=True)
+                                else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
+                            st.write("---")
+            else:
+                # Nếu không có Context, hiện full chiều ngang
+                for i, r in group_df.iterrows():
+                    st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
+                    u_ans = st.session_state.user_answers.get(i); ck_letter = str(r.get('correct_ans')).strip().upper()
+                    opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
+                    for let, txt in opts.items():
+                        if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
+                        if let == ck_letter and txt == u_ans: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn đã chọn đúng)</div>', unsafe_allow_html=True)
+                        elif let == ck_letter: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
+                        elif txt == u_ans: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn đã chọn sai)</div>', unsafe_allow_html=True)
+                        else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
+                    st.divider()
+
+        st.button("XONG", on_click=lambda: st.session_state.update({"view_mode":"list"}), use_container_width=True)
 
 # --- 6. ĐIỀU HƯỚNG ---
 if st.session_state.user is None: login_page()
