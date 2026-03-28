@@ -215,7 +215,7 @@ def teacher_page():
                         with cr:
                             r = df_ex.iloc[idx]
                             with st.container(border=True):
-                                if clean_nan(r.get('audio')) != " ": display_drive_audio(r.get('audio'))
+                                if 'audio' in df_ex.columns and clean_nan(r.get('audio')) != " ": display_drive_audio(r.get('audio'))
                                 ctx = clean_nan(r.get('context'))
                                 for p in ctx.split(";;"):
                                     if p.strip().startswith("http"): display_drive_image(p.strip())
@@ -258,17 +258,18 @@ def student_page():
         with st.form("quiz_form"):
             df, answers = st.session_state.current_df, {}
             df['ctx_tmp'] = df['context'].fillna('').astype(str).str.strip()
-            df['aud_tmp'] = df['audio'].fillna('').astype(str).str.strip()
-            df['group'] = ((df['ctx_tmp'] != df['ctx_tmp'].shift()) | (df['aud_tmp'] != df['aud_tmp'].shift())).cumsum()
+            # FIX: Kiểm tra cột audio có tồn tại không
+            if 'audio' in df.columns:
+                df['aud_tmp'] = df['audio'].fillna('').astype(str).str.strip()
+                df['group'] = ((df['ctx_tmp'] != df['ctx_tmp'].shift()) | (df['aud_tmp'] != df['aud_tmp'].shift())).cumsum()
+            else:
+                df['aud_tmp'] = ""
+                df['group'] = (df['ctx_tmp'] != df['ctx_tmp'].shift()).cumsum()
             
-            # BIẾN GHI NHỚ AUDIO TRONG FORM
             last_audio_rendered = None
-            
             for _, group_df in df.groupby('group'):
                 first = group_df.iloc[0]
                 curr_aud = str(first.get('aud_tmp')).strip()
-                
-                # CHỈ HIỆN AUDIO NẾU NÓ KHÁC VỚI AUDIO ĐÃ HIỆN TRƯỚC ĐÓ
                 if curr_aud != "" and curr_aud != last_audio_rendered:
                     display_drive_audio(curr_aud)
                     last_audio_rendered = curr_aud
@@ -311,24 +312,25 @@ def student_page():
         if st.button("⬅ Quay lại danh sách"): st.session_state.view_mode = 'list'; st.rerun()
         df = st.session_state.current_df
         df['ctx_tmp'] = df['context'].fillna('').astype(str).str.strip()
-        df['aud_tmp'] = df['audio'].fillna('').astype(str).str.strip()
-        df['group'] = ((df['ctx_tmp'] != df['ctx_tmp'].shift()) | (df['aud_tmp'] != df['aud_tmp'].shift())).cumsum()
+        if 'audio' in df.columns:
+            df['aud_tmp'] = df['audio'].fillna('').astype(str).str.strip()
+            df['group'] = ((df['ctx_tmp'] != df['ctx_tmp'].shift()) | (df['aud_tmp'] != df['aud_tmp'].shift())).cumsum()
+        else:
+            df['aud_tmp'] = ""
+            df['group'] = (df['ctx_tmp'] != df['ctx_tmp'].shift()).cumsum()
         
         last_audio_review = None
         for _, group_df in df.groupby('group'):
             first = group_df.iloc[0]
             ctx = clean_nan(first.get('context'))
             curr_aud = str(first.get('aud_tmp')).strip()
-            
             if ctx.lower() not in [" ", "nan", "none"]:
                 st.markdown("---")
                 l_rev, r_rev = st.columns([1, 1])
                 with l_rev:
                     with st.container(height=650):
-                        # HIỆN AUDIO NẾU CHƯA XUẤT HIỆN
                         if curr_aud != "" and curr_aud != last_audio_review:
-                            display_drive_audio(curr_aud)
-                            last_audio_review = curr_aud
+                            display_drive_audio(curr_aud); last_audio_review = curr_aud
                         for p in ctx.split(";;"):
                             if p.strip().startswith("http"): display_drive_image(p.strip())
                             else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
@@ -340,24 +342,23 @@ def student_page():
                             opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
                             for let, txt in opts.items():
                                 if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
-                                is_correct, is_mine = (let == ck_letter), (txt == u_ans)
-                                if is_correct and is_mine: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
-                                elif is_correct: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
-                                elif is_mine: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
+                                is_cor, is_mi = (let == ck_letter), (txt == u_ans)
+                                if is_cor and is_mi: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
+                                elif is_cor: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
+                                elif is_mi: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
                                 else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
                             st.write("---")
             else:
                 if curr_aud != "" and curr_aud != last_audio_review:
-                    display_drive_audio(curr_aud)
-                    last_audio_review = curr_aud
+                    display_drive_audio(curr_aud); last_audio_review = curr_aud
                 for i, r in group_df.iterrows():
                     st.write(f"**Câu {i+1}: {clean_nan(r.get('question','Listen'))}**")
-                    u_ans = st.session_state.user_answers.get(i); ck_letter = str(r.get('correct_ans')).strip().upper()
+                    u_ans, ck_let = st.session_state.user_answers.get(i), str(r.get('correct_ans')).strip().upper()
                     opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
                     for let, txt in opts.items():
                         if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
-                        if let == ck_letter and txt == u_ans: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
-                        elif let == ck_letter: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
+                        if let == ck_let and txt == u_ans: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
+                        elif let == ck_let: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
                         elif txt == u_ans: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
                         else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
                     st.divider()
