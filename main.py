@@ -98,15 +98,38 @@ def start_lesson_callback(ex, ex_id):
 
 # --- 5. CÁC TRANG CHỨC NĂNG ---
 
+# --- CẬP NHẬT HÀM LOGIN_PAGE ---
+
 def login_page():
-    st.title("🔑 Đăng nhập")
-    email = st.text_input("Nhập Email của bạn:")
-    if st.button("Xác nhận"):
-        user_ref = db.collection('users').document(email).get()
-        if user_ref.exists:
-            st.session_state.user = {**user_ref.to_dict(), 'email': email}
-            st.rerun()
-        else: st.error("Email không tồn tại.")
+    st.markdown('<h1 style="text-align: center;">🔑 Đăng nhập Hệ thống</h1>', unsafe_allow_html=True)
+    
+    # Tạo khung đăng nhập cho đẹp
+    with st.container(border=True):
+        email = st.text_input("📧 Nhập Tài khoản của bạn:")
+        # Thêm type="password" để hiện dấu chấm đen bảo mật
+        password = st.text_input("🔒 Nhập Mật khẩu:", type="password") 
+        
+        if st.button("Xác nhận Đăng nhập", use_container_width=True):
+            if email and password:
+                with st.spinner("Đang xác thực..."):
+                    user_ref = db.collection('users').document(email).get()
+                    
+                    if user_ref.exists:
+                        user_data = user_ref.to_dict()
+                        # KIỂM TRA MẬT KHẨU (So khớp với field 'password' trên Firebase)
+                        if str(user_data.get('password')) == password:
+                            st.session_state.user = {**user_data, 'email': email}
+                            st.success(f"Chào mừng {user_data.get('full_name', 'bạn')} quay trở lại!")
+                            time.sleep(1) # Đợi 1 giây để hiện thông báo thành công
+                            st.rerun()
+                        else:
+                            st.error("❌ Mật khẩu không chính xác. Vui lòng thử lại.")
+                    else:
+                        st.error("❌ Email này chưa được đăng ký trên hệ thống.")
+            else:
+                st.warning("⚠️ Vui lòng nhập đầy đủ cả Email và Mật khẩu.")
+
+# --- CÁC PHẦN KHÁC TRONG CODE GIỮ NGUYÊN ---
 
 def teacher_page():
     st.sidebar.button("Đăng xuất", on_click=logout)
