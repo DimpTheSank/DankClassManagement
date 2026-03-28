@@ -7,17 +7,16 @@ import requests
 import time
 from datetime import datetime
 
-# --- 1. CẤU HÌNH GIAO DIỆN & CSS (TỐI ƯU MOBILE & CHỐNG CHỌN ẢNH) ---
+# --- 1. CẤU HÌNH GIAO DIỆN & CSS (TINH GỌN & CHỮ TO MOBILE) ---
 st.set_page_config(page_title="Dank's class management", layout="wide")
 
 st.markdown("""
     <style>
-    /* CSS CHUNG */
     .big-font { font-size:70px !important; font-weight: bold; text-align: center; }
-    div.stButton > button { height: 100px; font-size: 30px !important; font-weight: bold; border-radius: 20px; }
+    div.stButton > button { height: 100px; font-size: 25px !important; font-weight: bold; border-radius: 20px; }
     .context-display {
         font-family: 'Times New Roman', serif;
-        font-size: 20px !important; line-height: 1.8;
+        font-size: 22px !important; line-height: 1.8;
         white-space: pre-wrap !important; background-color: #ffffff;
         padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         margin-bottom: 15px; color: #333;
@@ -26,26 +25,21 @@ st.markdown("""
     .wrong-ans { color: #dc3545; font-weight: bold; }
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
 
-    /* CSS CHO MOBILE (CHỮ TO) */
     @media (max-width: 768px) {
         .context-display { font-size: 18px !important; }
         .stMarkdown p, .stRadio label { font-size: 18px !important; }
-        div.stButton > button { height: 65px; font-size: 20px !important; }
+        div.stButton > button { height: 60px; font-size: 18px !important; margin-bottom: 10px; }
     }
 
-    /* VÔ HIỆU HOÁ THAO TÁC TRÊN ẢNH (CHỐNG HIỆN MENU TẢI XUỐNG) */
+    /* Vô hiệu hoá menu chuột phải/nhấn giữ trên ảnh */
     img {
-        -webkit-touch-callout: none !important; /* Chặn menu nhấn giữ iOS/Android */
-        -webkit-user-select: none !important;    /* Chặn chọn ảnh */
-        -khtml-user-select: none !important;
-        -moz-user-select: none !important;
-        -ms-user-select: none !important;
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
         user-select: none !important;
-        pointer-events: none;                   /* Khiến ảnh không thể bị click/kéo */
+        pointer-events: none;
         border-radius: 8px;
     }
     </style>
-    
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     """, unsafe_allow_html=True)
 
@@ -68,8 +62,7 @@ def get_drive_content(url):
 
 def display_drive_image(url):
     content = get_drive_content(url)
-    if content:
-        st.image(content, use_container_width=True)
+    if content: st.image(content, use_container_width=True)
 
 def display_drive_audio(url):
     content = get_drive_content(url)
@@ -95,18 +88,33 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'view_mode' not in st.session_state: st.session_state.view_mode = 'list'
 if 'current_df' not in st.session_state: st.session_state.current_df = None
 if 'selected_ex' not in st.session_state: st.session_state.selected_ex = None
+if 'user_answers' not in st.session_state: st.session_state.user_answers = {}
 
 def logout():
     for key in list(st.session_state.keys()): del st.session_state[key]
     st.rerun()
 
+# CALLBACK LÀM BÀI
 def start_lesson_callback(ex, ex_id):
     try:
         df = pd.read_excel(get_drive_url(ex['excel_link']))
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df, st.session_state.current_ex_info = df, ex
         st.session_state.current_ex_id, st.session_state.view_mode = ex_id, 'quiz'
+        st.session_state.user_answers = {}
     except: st.error("Lỗi nạp bài.")
+
+# CALLBACK XEM LẠI ĐÁP ÁN TRỰC TIẾP
+def start_review_direct_callback(ex, history):
+    try:
+        df = pd.read_excel(get_drive_url(ex['excel_link']))
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        st.session_state.current_df = df
+        latest_sub = max(history, key=lambda x: x['submitted_at'])
+        # Chuyển keys từ string sang int để khớp với vòng lặp review
+        st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
+        st.session_state.view_mode = 'review'
+    except: st.error("Lỗi nạp dữ liệu Review.")
 
 # --- 5. CÁC TRANG ---
 
@@ -230,32 +238,40 @@ def teacher_page():
 
 def student_page():
     st.sidebar.button("Đăng xuất", on_click=logout)
-    full_name = st.session_state.user.get('full_name', 'Học viên')
-    st.title(f"👋 Xin chào, {full_name}!")
+    u_email = st.session_state.user['email']
+    st.title(f"👋 Xin chào, {st.session_state.user.get('full_name', 'Học viên')}!")
     st.divider()
+
     if st.session_state.view_mode == 'list':
         st.subheader("📚 Bài tập của bạn")
-        u_email = st.session_state.user['email']
         all_subs = [s.to_dict() for s in db.collection('submissions').where('student_email', '==', u_email).stream()]
         exs = db.collection('exercises').where('assigned_to', 'array_contains', u_email).stream()
         for doc in exs:
             ex, ex_id = doc.to_dict(), doc.id
             history = [s for s in all_subs if s.get('exercise_title') == ex['title']]
-            if history:
-                nums = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
-                raws = [s.get('score_raw') for s in history]
-                info = f"📉 Thấp: `{raws[nums.index(min(nums))]}` | 🏆 Cao: `{raws[nums.index(max(nums))]}`"
-            else: info = "🆕 *Chưa làm*"
+            can_review = ex.get('review_permissions', {}).get(u_email, False)
+            
             with st.container(border=True):
                 c1, c2 = st.columns([4, 1])
-                c1.subheader(f"{ex['type']} - {ex['title']}")
-                c1.markdown(f"🔢 Lần làm: `{len(history)}` | {info}")
-                c2.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id))
+                with c1:
+                    st.subheader(f"{ex['type']} - {ex['title']}")
+                    if history:
+                        scores = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
+                        raws = [s.get('score_raw') for s in history]
+                        st.markdown(f"🔢 Lần làm: `{len(history)}` | 📉 Thấp: `{raws[scores.index(min(scores))]}` | 🏆 Cao: `{raws[scores.index(max(scores))]}`")
+                    else: st.markdown("🆕 *Chưa làm*")
+                
+                with c2:
+                    st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
+                    # NÚT REVIEW HIỆN DƯỚI NẾU ĐỦ ĐIỀU KIỆN
+                    if history and can_review:
+                        st.button("Xem lại 🧐", key=f"rev_btn_{ex_id}", on_click=start_review_direct_callback, args=(ex, history), use_container_width=True)
+
     elif st.session_state.view_mode == 'quiz':
         st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
         if st.button("⬅ Thoát"): st.session_state.view_mode = 'list'; st.rerun()
         with st.form("quiz_form"):
-            df, answers, last_audio = st.session_state.current_df, {}, None
+            df, answers = st.session_state.current_df, {}
             df['group'] = (df['context'] != df['context'].shift()).cumsum()
             for _, group_df in df.groupby('group'):
                 first = group_df.iloc[0]
@@ -286,16 +302,14 @@ def student_page():
             if st.form_submit_button("Nộp bài 🏁", use_container_width=True):
                 correct = sum(1 for i, r in df.iterrows() if {clean_nan(r.get('opt_a')):'A', clean_nan(r.get('opt_b')):'B', clean_nan(r.get('opt_c')):'C', clean_nan(r.get('opt_d')):'D'}.get(answers.get(i)) == str(r.get('correct_ans','')).strip().upper())
                 st.session_state.user_answers, st.session_state.res = answers, f"{correct}/{len(df)}"
-                db.collection('submissions').add({'student_email':st.session_state.user['email'], 'exercise_title':st.session_state.current_ex_info['title'], 'score_raw':st.session_state.res, 'user_answers': {str(k): v for k, v in answers.items()}, 'submitted_at':datetime.now()})
+                db.collection('submissions').add({'student_email':u_email, 'exercise_title':st.session_state.current_ex_info['title'], 'score_raw':st.session_state.res, 'user_answers': {str(k): v for k, v in answers.items()}, 'submitted_at':datetime.now()})
                 st.session_state.view_mode = 'res'; st.rerun()
+
     elif st.session_state.view_mode == 'res':
         st.balloons(); st.title(f"🎉 Kết quả: {st.session_state.res}")
-        ex_id = st.session_state.current_ex_id
-        ex_doc = db.collection('exercises').document(ex_id).get().to_dict()
-        if ex_doc.get('review_permissions', {}).get(st.session_state.user['email'], False):
-            if st.button("XEM LẠI ĐÁP ÁN (REVIEW)"): st.session_state.view_mode = 'review'; st.rerun()
-        else: st.info("💡 Giáo viên chưa mở quyền Review.")
+        if st.button("XEM LẠI ĐÁP ÁN (REVIEW)"): st.session_state.view_mode = 'review'; st.rerun()
         if st.button("QUAY LẠI TRANG CHỦ"): st.session_state.view_mode = 'list'; st.rerun()
+
     elif st.session_state.view_mode == 'review':
         st.title("🧐 Review đáp án"); df = st.session_state.current_df
         for i, r in df.iterrows():
