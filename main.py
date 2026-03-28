@@ -7,7 +7,7 @@ import requests
 import time
 from datetime import datetime
 
-# --- 1. CẤU HÌNH GIAO DIỆN & CSS (TINH GỌN & CHỮ TO MOBILE) ---
+# --- 1. CẤU HÌNH GIAO DIỆN & CSS ---
 st.set_page_config(page_title="Dank's class management", layout="wide")
 
 st.markdown("""
@@ -21,17 +21,17 @@ st.markdown("""
         padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         margin-bottom: 15px; color: #333;
     }
-    .correct-ans { color: #28a745; font-weight: bold; }
-    .wrong-ans { color: #dc3545; font-weight: bold; }
+    .correct-label { color: #28a745; font-weight: bold; background-color: #e8f5e9; padding: 2px 8px; border-radius: 5px; }
+    .wrong-label { color: #dc3545; font-weight: bold; background-color: #ffebee; padding: 2px 8px; border-radius: 5px; }
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
 
     @media (max-width: 768px) {
-        .context-display { font-size: 18px !important; }
-        .stMarkdown p, .stRadio label { font-size: 18px !important; }
-        div.stButton > button { height: 60px; font-size: 18px !important; margin-bottom: 10px; }
+        .context-display { font-size: 19px !important; }
+        .stMarkdown p, .stRadio label { font-size: 19px !important; }
+        div.stButton > button { height: 65px; font-size: 18px !important; margin-bottom: 10px; }
     }
 
-    /* Vô hiệu hoá menu chuột phải/nhấn giữ trên ảnh */
+    /* Chống menu nhấn giữ trên ảnh */
     img {
         -webkit-touch-callout: none !important;
         -webkit-user-select: none !important;
@@ -78,8 +78,7 @@ if not firebase_admin._apps:
         fb_dict = dict(st.secrets["firebase"])
         if "private_key" in fb_dict: fb_dict["private_key"] = fb_dict["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(fb_dict)
-    else:
-        cred = credentials.Certificate('data/serviceAccountKey.json')
+    else: cred = credentials.Certificate('data/serviceAccountKey.json')
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -94,7 +93,6 @@ def logout():
     for key in list(st.session_state.keys()): del st.session_state[key]
     st.rerun()
 
-# CALLBACK LÀM BÀI
 def start_lesson_callback(ex, ex_id):
     try:
         df = pd.read_excel(get_drive_url(ex['excel_link']))
@@ -104,14 +102,13 @@ def start_lesson_callback(ex, ex_id):
         st.session_state.user_answers = {}
     except: st.error("Lỗi nạp bài.")
 
-# CALLBACK XEM LẠI ĐÁP ÁN TRỰC TIẾP
 def start_review_direct_callback(ex, history):
     try:
         df = pd.read_excel(get_drive_url(ex['excel_link']))
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
         latest_sub = max(history, key=lambda x: x['submitted_at'])
-        # Chuyển keys từ string sang int để khớp với vòng lặp review
+        # Chuyển keys sang int để khớp với index của dataframe
         st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
         st.session_state.view_mode = 'review'
     except: st.error("Lỗi nạp dữ liệu Review.")
@@ -126,9 +123,9 @@ def login_page():
         if st.button("Xác nhận", use_container_width=True):
             user_ref = db.collection('users').document(email).get()
             if user_ref.exists:
-                user_data = user_ref.to_dict()
-                if str(user_data.get('password')) == password:
-                    st.session_state.user = {**user_data, 'email': email}
+                u_data = user_ref.to_dict()
+                if str(u_data.get('password')) == password:
+                    st.session_state.user = {**u_data, 'email': email}
                     st.rerun()
                 else: st.error("Sai mật khẩu.")
             else: st.error("Email không tồn tại.")
@@ -141,99 +138,96 @@ def teacher_page():
     with tab_assign:
         with st.expander("Giao bài tập mới", expanded=True):
             students = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
-            title = st.text_input("Tiêu đề")
+            title, link = st.text_input("Tiêu đề"), st.text_input("Link Excel")
             ex_type = st.selectbox("Loại", ["Reading (Part 5,6,7)", "Listening", "Vocab Game"])
-            link = st.text_input("Link Excel")
             assigned = st.multiselect("Giao cho:", students)
             if st.button("🚀 Đăng bài", use_container_width=True):
                 db.collection('exercises').add({'title': title, 'type': ex_type, 'excel_link': link, 'assigned_to': assigned, 'created_at': firestore.SERVER_TIMESTAMP, 'review_permissions': {e: False for e in assigned}})
-                st.success("Đã đăng!")
+                st.success("Đã đăng bài!")
 
     with tab_manage:
-        all_students = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
-        selected_st = st.selectbox("Chọn học sinh:", ["-- Chọn --"] + all_students)
-        if selected_st != "-- Chọn --":
-            exs = db.collection('exercises').where('assigned_to', 'array_contains', selected_st).stream()
+        all_st = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
+        sel_st = st.selectbox("Chọn học sinh:", ["-- Chọn --"] + all_st)
+        if sel_st != "-- Chọn --":
+            exs = db.collection('exercises').where('assigned_to', 'array_contains', sel_st).stream()
             for doc in exs:
                 ex, ex_id = doc.to_dict(), doc.id
                 with st.expander(f"📝 {ex['title']}"):
                     c1, c2, c3 = st.columns([2, 1, 1])
                     c1.write(f"Loại: {ex['type']}")
                     perms = ex.get('review_permissions', {})
-                    if c2.toggle("Cho phép Review", value=perms.get(selected_st, False), key=f"rev_{ex_id}_{selected_st}"):
-                        perms[selected_st] = True
+                    if c2.toggle("Cho phép Review", value=perms.get(sel_st, False), key=f"rev_{ex_id}_{sel_st}"):
+                        perms[sel_st] = True
                         db.collection('exercises').document(ex_id).update({'review_permissions': perms})
                     else:
-                        perms[selected_st] = False
+                        perms[sel_st] = False
                         db.collection('exercises').document(ex_id).update({'review_permissions': perms})
-                    if c3.button("🗑️ Xoá bài", key=f"del_{ex_id}_{selected_st}"):
-                        new_a = [e for e in ex['assigned_to'] if e != selected_st]
+                    if c3.button("🗑️ Xoá bài", key=f"del_{ex_id}_{sel_st}"):
+                        new_a = [e for e in ex['assigned_to'] if e != sel_st]
                         if not new_a: db.collection('exercises').document(ex_id).delete()
                         else: db.collection('exercises').document(ex_id).update({'assigned_to': new_a})
                         st.rerun()
 
     with tab_stats:
-        chosen_students = st.multiselect("Chọn nhóm học sinh:", all_students)
-        if chosen_students:
+        # Giữ nguyên logic Dashboard split 2 đồ thị của bạn
+        chosen = st.multiselect("Chọn nhóm học sinh:", all_st)
+        if chosen:
             student_ex_lists = []
-            for email in chosen_students:
+            for email in chosen:
                 exs = db.collection('exercises').where('assigned_to', 'array_contains', email).stream()
                 student_ex_lists.append({doc.to_dict()['title'] for doc in exs})
-            common_titles = list(set.intersection(*student_ex_lists)) if student_ex_lists else []
-            if common_titles:
-                selected_ex_title = st.selectbox("Chọn bài tập:", ["-- Chọn bài tập --"] + common_titles)
-                if selected_ex_title != "-- Chọn bài tập --":
-                    ex_doc = db.collection('exercises').where('title', '==', selected_ex_title).limit(1).get()[0]
-                    df_exam = pd.read_excel(get_drive_url(ex_doc.to_dict()['excel_link']))
-                    df_exam.columns = [str(c).strip().lower() for c in df_exam.columns]
-                    all_subs = db.collection('submissions').where('exercise_title', '==', selected_ex_title).stream()
-                    student_data_map = {email: [] for email in chosen_students}
-                    for s in all_subs:
+            common = list(set.intersection(*student_ex_lists)) if student_ex_lists else []
+            if common:
+                sel_title = st.selectbox("Chọn bài tập:", ["-- Chọn --"] + common)
+                if sel_title != "-- Chọn --":
+                    ex_doc = db.collection('exercises').where('title', '==', sel_title).limit(1).get()[0]
+                    df_ex = pd.read_excel(get_drive_url(ex_doc.to_dict()['excel_link']))
+                    df_ex.columns = [str(c).strip().lower() for c in df_ex.columns]
+                    all_s = db.collection('submissions').where('exercise_title', '==', sel_title).stream()
+                    data_map = {e: [] for e in chosen}
+                    for s in all_s:
                         d = s.to_dict()
-                        if d['student_email'] in chosen_students:
+                        if d['student_email'] in chosen:
                             try:
                                 n, t = map(int, d.get('score_raw', '0/0').split('/'))
                                 d['score_percent'] = (n / t) * 100
                             except: d['score_percent'] = 0
-                            student_data_map[d['student_email']].append(d)
-                    summary_list, wrong_stats = [], {i: set() for i in range(len(df_exam))}
-                    for email in chosen_students:
-                        subs = student_data_map[email]
+                            data_map[d['student_email']].append(d)
+                    summary, wrong_stats = [], {i: set() for i in range(len(df_ex))}
+                    for e in chosen:
+                        subs = data_map[e]
                         if subs:
-                            percents = [s['score_percent'] for s in subs]
-                            summary_list.append({'Học sinh': email, 'Thấp nhất (%)': min(percents), 'Cao nhất (%)': max(percents)})
+                            per = [s['score_percent'] for s in subs]
+                            summary.append({'Học sinh': e, 'Thấp nhất (%)': min(per), 'Cao nhất (%)': max(per)})
                             latest = max(subs, key=lambda x: x['submitted_at'])
-                            ans_dict = latest.get('user_answers', {})
-                            for i, row in df_exam.iterrows():
+                            ans = latest.get('user_answers', {})
+                            for i, row in df_ex.iterrows():
                                 ck = str(row.get('correct_ans', '')).strip().upper()
                                 mapping = {clean_nan(row.get('opt_a')):'A', clean_nan(row.get('opt_b')):'B', clean_nan(row.get('opt_c')):'C', clean_nan(row.get('opt_d')):'D'}
-                                if mapping.get(ans_dict.get(str(i))) != ck: wrong_stats[i].add(email)
-                    if summary_list:
-                        df_summary = pd.DataFrame(summary_list)
-                        st.markdown("#### 📊 So sánh sự tiến bộ (%)")
-                        c_low, c_high = st.columns(2)
-                        c_low.write("**📉 Lần thấp nhất**")
-                        c_low.bar_chart(df_summary.set_index('Học sinh')['Thấp nhất (%)'])
-                        c_high.write("**🏆 Lần cao nhất**")
-                        c_high.bar_chart(df_summary.set_index('Học sinh')['Cao nhất (%)'])
-                        st.markdown("#### 🎯 Phân tích chi tiết lỗi sai")
-                        c_l, c_r = st.columns([1, 1])
-                        q_errs = [(i, len(emails)) for i, emails in wrong_stats.items() if len(emails) > 0]
-                        q_errs.sort(key=lambda x: x[1], reverse=True)
-                        with c_l:
-                            sel_q = st.radio("Chọn câu:", [f"Câu {i+1} ({cnt} bạn sai)" for i, cnt in q_errs], label_visibility="collapsed")
-                            idx = int(sel_q.split(" ")[1]) - 1
-                        with c_r:
-                            row = df_exam.iloc[idx]
+                                if mapping.get(ans.get(str(i))) != ck: wrong_stats[i].add(e)
+                    if summary:
+                        df_s = pd.DataFrame(summary)
+                        st.markdown("#### 📊 Tiến độ (%)")
+                        c_l, c_h = st.columns(2)
+                        c_l.write("**📉 Thấp nhất**"); c_l.bar_chart(df_s.set_index('Học sinh')['Thấp nhất (%)'])
+                        c_h.write("**🏆 Cao nhất**"); c_h.bar_chart(df_s.set_index('Học sinh')['Cao nhất (%)'])
+                        st.markdown("#### 🎯 Câu sai nhiều nhất")
+                        cl, cr = st.columns([1, 1])
+                        q_errs = sorted([(i, len(ems)) for i, ems in wrong_stats.items() if ems], key=lambda x: x[1], reverse=True)
+                        with cl:
+                            sq = st.radio("Câu:", [f"Câu {i+1} ({c} bạn sai)" for i, c in q_errs], label_visibility="collapsed")
+                            idx = int(sq.split(" ")[1]) - 1
+                        with cr:
+                            r = df_ex.iloc[idx]
                             with st.container(border=True):
-                                if clean_nan(row.get('audio')) != " ": display_drive_audio(row.get('audio'))
-                                ctx = clean_nan(row.get('context'))
+                                if clean_nan(r.get('audio')) != " ": display_drive_audio(r.get('audio'))
+                                ctx = clean_nan(r.get('context'))
                                 for p in ctx.split(";;"):
                                     if p.strip().startswith("http"): display_drive_image(p.strip())
                                     else: st.markdown(f"*{p.strip()}*")
-                                st.markdown(f"**Câu {idx+1}: {clean_nan(row.get('question'))}**")
-                                ck = str(row.get('correct_ans')).strip().upper()
-                                st.success(f"✅ Đáp án: {ck}. {clean_nan(row.get(f'opt_{ck.lower()}'))}")
+                                st.markdown(f"**Câu {idx+1}: {clean_nan(r.get('question'))}**")
+                                ck = str(r.get('correct_ans')).strip().upper()
+                                st.success(f"✅ Đáp án: {ck}. {clean_nan(r.get(f'opt_{ck.lower()}'))}")
                                 st.error(f"❌ Các bạn đang sai: {', '.join(wrong_stats[idx])}")
 
 def student_page():
@@ -249,23 +243,19 @@ def student_page():
         for doc in exs:
             ex, ex_id = doc.to_dict(), doc.id
             history = [s for s in all_subs if s.get('exercise_title') == ex['title']]
-            can_review = ex.get('review_permissions', {}).get(u_email, False)
-            
+            can_rev = ex.get('review_permissions', {}).get(u_email, False)
             with st.container(border=True):
-                c1, c2 = st.columns([4, 1])
+                c1, c2 = st.columns([4, 1.5])
                 with c1:
                     st.subheader(f"{ex['type']} - {ex['title']}")
                     if history:
-                        scores = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
-                        raws = [s.get('score_raw') for s in history]
-                        st.markdown(f"🔢 Lần làm: `{len(history)}` | 📉 Thấp: `{raws[scores.index(min(scores))]}` | 🏆 Cao: `{raws[scores.index(max(scores))]}`")
+                        scs = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
+                        st.markdown(f"🔢 Lần làm: `{len(history)}` | 📉 Thấp nhất: `{min(scs)}` | 🏆 Cao nhất: `{max(scs)}` / {history[0].get('score_raw','').split('/')[-1]}")
                     else: st.markdown("🆕 *Chưa làm*")
-                
                 with c2:
                     st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
-                    # NÚT REVIEW HIỆN DƯỚI NẾU ĐỦ ĐIỀU KIỆN
-                    if history and can_review:
-                        st.button("Xem lại 🧐", key=f"rev_btn_{ex_id}", on_click=start_review_direct_callback, args=(ex, history), use_container_width=True)
+                    if history and can_rev:
+                        st.button("Xem lại 🧐", key=f"rev_{ex_id}", on_click=start_review_direct_callback, args=(ex, history), use_container_width=True)
 
     elif st.session_state.view_mode == 'quiz':
         st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
@@ -275,8 +265,7 @@ def student_page():
             df['group'] = (df['context'] != df['context'].shift()).cumsum()
             for _, group_df in df.groupby('group'):
                 first = group_df.iloc[0]
-                if 'audio' in df.columns and pd.notna(first.get('audio')):
-                    display_drive_audio(str(first.get('audio')))
+                if 'audio' in df.columns and pd.notna(first.get('audio')): display_drive_audio(str(first.get('audio')))
                 ctx = clean_nan(first.get('context'))
                 if ctx.lower() in [" ", "nan", "none"]:
                     for i, r in group_df.iterrows():
@@ -286,8 +275,8 @@ def student_page():
                         answers[i] = st.radio(f"q{i}", opts, key=f"q{i}", index=None, label_visibility="collapsed"); st.divider()
                 else:
                     st.markdown("---")
-                    l_col, r_col = st.columns([1, 1])
-                    with l_col:
+                    l, r_col = st.columns([1, 1])
+                    with l:
                         with st.container(height=650):
                             for p in ctx.split(";;"):
                                 if p.strip().startswith("http"): display_drive_image(p.strip())
@@ -311,17 +300,33 @@ def student_page():
         if st.button("QUAY LẠI TRANG CHỦ"): st.session_state.view_mode = 'list'; st.rerun()
 
     elif st.session_state.view_mode == 'review':
-        st.title("🧐 Review đáp án"); df = st.session_state.current_df
-        for i, r in df.iterrows():
-            st.write(f"**Câu {i+1}: {r.get('question')}**")
-            u_ans = st.session_state.user_answers.get(i)
-            ck = str(r.get('correct_ans')).strip().upper()
-            ct = clean_nan(r.get(f'opt_{ck.lower()}'))
-            if {clean_nan(r.get('opt_a')):'A', clean_nan(r.get('opt_b')):'B', clean_nan(r.get('opt_c')):'C', clean_nan(r.get('opt_d')):'D'}.get(u_ans) == ck:
-                st.markdown(f"✅ Đúng: **{u_ans}**")
-            else: st.markdown(f"❌ Chọn: {u_ans} | 👉 Đúng: <span class='correct-ans'>{ct}</span>", unsafe_allow_html=True)
-            st.divider()
-        if st.button("XONG"): st.session_state.view_mode = 'list'; st.rerun()
+        st.title("🧐 Review đáp án chi tiết")
+        if st.button("⬅ Quay lại danh sách"): st.session_state.view_mode = 'list'; st.rerun()
+        df = st.session_state.current_df
+        df['group'] = (df['context'] != df['context'].shift()).cumsum()
+        for _, group_df in df.groupby('group'):
+            first = group_df.iloc[0]
+            ctx = clean_nan(first.get('context'))
+            if ctx.lower() not in [" ", "nan", "none"]:
+                st.markdown("---")
+                for p in ctx.split(";;"):
+                    if p.strip().startswith("http"): display_drive_image(p.strip())
+                    else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
+            for i, r in group_df.iterrows():
+                st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
+                u_ans = st.session_state.user_answers.get(i)
+                ck_letter = str(r.get('correct_ans')).strip().upper()
+                opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
+                for let, txt in opts.items():
+                    if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
+                    is_correct = (let == ck_letter)
+                    is_mine = (txt == u_ans)
+                    if is_correct and is_mine: st.markdown(f"✅ **{let}. {txt}** *(Bạn đã chọn đúng)*")
+                    elif is_correct: st.markdown(f"🟢 **{let}. {txt}** *(Đáp án đúng)*")
+                    elif is_mine: st.markdown(f"❌ **{let}. {txt}** *(Bạn đã chọn sai)*")
+                    else: st.write(f"{let}. {txt}")
+                st.write("---")
+        st.button("XONG", on_click=lambda: st.session_state.update({"view_mode":"list"}))
 
 # --- 6. ĐIỀU HƯỚNG ---
 if st.session_state.user is None: login_page()
