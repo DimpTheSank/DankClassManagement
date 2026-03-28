@@ -6,6 +6,7 @@ import re
 import requests
 import time
 from datetime import datetime
+import altair as alt # Thêm để vẽ biểu đồ đồng bộ scale
 
 # --- 1. CẤU HÌNH GIAO DIỆN & CSS ---
 st.set_page_config(page_title="Dank's class management", layout="wide")
@@ -133,6 +134,7 @@ def teacher_page():
     st.sidebar.button("Đăng xuất", on_click=logout)
     st.title("👨‍🏫 Quản lý Học viên")
     t1, t2, t3 = st.tabs(["📤 Giao bài", "👥 Quản lý", "📊 Thống kê"])
+    
     with t1:
         with st.expander("Giao bài tập mới", expanded=True):
             students = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
@@ -142,9 +144,10 @@ def teacher_page():
             if st.button("🚀 Đăng bài", use_container_width=True):
                 db.collection('exercises').add({'title': title, 'type': ex_type, 'excel_link': link, 'assigned_to': assigned, 'created_at': firestore.SERVER_TIMESTAMP, 'review_permissions': {e: False for e in assigned}})
                 st.success("Đã đăng bài!")
+    
     with t2:
-        all_st = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
-        sel_st = st.selectbox("Chọn học sinh:", ["-- Chọn --"] + all_st)
+        all_st_ids = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
+        sel_st = st.selectbox("Chọn học sinh:", ["-- Chọn --"] + all_st_ids)
         if sel_st != "-- Chọn --":
             exs = db.collection('exercises').where('assigned_to', 'array_contains', sel_st).stream()
             for doc in exs:
@@ -164,8 +167,11 @@ def teacher_page():
                         if not new_a: db.collection('exercises').document(ex_id).delete()
                         else: db.collection('exercises').document(ex_id).update({'assigned_to': new_a})
                         st.rerun()
+    
     with t3:
-        chosen = st.multiselect("Chọn nhóm học sinh:", all_st)
+        all_users = {u.id: u.to_dict().get('full_name', u.id) for u in db.collection('users').stream()}
+        all_st_ids = [k for k, v in all_users.items()]
+        chosen = st.multiselect("Chọn nhóm học sinh:", all_st_ids)
         if chosen:
             student_ex_lists = []
             for email in chosen:
@@ -188,24 +194,43 @@ def teacher_page():
                                 d['score_percent'] = (n / t) * 100
                             except: d['score_percent'] = 0
                             data_map[d['student_email']].append(d)
+                    
                     summary, wrong_stats = [], {i: set() for i in range(len(df_ex))}
                     for e in chosen:
                         subs = data_map[e]
                         if subs:
                             per = [s['score_percent'] for s in subs]
-                            summary.append({'Học sinh': e, 'Thấp nhất (%)': min(per), 'Cao nhất (%)': max(per)})
+                            summary.append({'Học sinh': all_users.get(e, e), 'Thấp nhất (%)': min(per), 'Cao nhất (%)': max(per)})
                             latest = max(subs, key=lambda x: x['submitted_at'])
                             ans = latest.get('user_answers', {})
                             for i, row in df_ex.iterrows():
                                 ck = str(row.get('correct_ans', '')).strip().upper()
                                 mapping = {clean_nan(row.get('opt_a')):'A', clean_nan(row.get('opt_b')):'B', clean_nan(row.get('opt_c')):'C', clean_nan(row.get('opt_d')):'D'}
-                                if mapping.get(ans.get(str(i))) != ck: wrong_stats[i].add(e)
+                                if mapping.get(ans.get(str(i))) != ck: wrong_stats[i].add(all_users.get(e, e))
+                    
                     if summary:
                         df_s = pd.DataFrame(summary)
+                        y_limit = max(df_s['Cao nhất (%)'].max(), 10) # Lấy max của biểu đồ Cao nhất để làm scale
+                        
                         st.markdown("#### 📊 Tiến độ (%)")
                         c_l, c_h = st.columns(2)
-                        c_l.write("**📉 Thấp nhất**"); c_l.bar_chart(df_s.set_index('Học sinh')['Thấp nhất (%)'])
-                        c_h.write("**🏆 Cao nhất**"); c_h.bar_chart(df_s.set_index('Học sinh')['Cao nhất (%)'])
+                        
+                        # Vẽ bằng Altair để ép chung trục Y (Shared Scale)
+                        chart_low = alt.Chart(df_s).mark_bar(color='#90caf9').encode(
+                            x=alt.X('Học sinh:N', title=None),
+                            y=alt.Y('Thấp nhất (%):Q', scale=alt.Scale(domain=[0, y_limit])),
+                            tooltip=['Học sinh', 'Thấp nhất (%)']
+                        ).properties(title="📉 Lần thấp nhất")
+                        
+                        chart_high = alt.Chart(df_s).mark_bar(color='#1565c0').encode(
+                            x=alt.X('Học sinh:N', title=None),
+                            y=alt.Y('Cao nhất (%):Q', scale=alt.Scale(domain=[0, y_limit])),
+                            tooltip=['Học sinh', 'Cao nhất (%)']
+                        ).properties(title="🏆 Lần cao nhất")
+                        
+                        c_l.altair_chart(chart_low, use_container_width=True)
+                        c_h.altair_chart(chart_high, use_container_width=True)
+
                         st.markdown("#### 🎯 Câu sai nhiều nhất")
                         cl, cr = st.columns([1, 1])
                         q_errs = sorted([(i, len(ems)) for i, ems in wrong_stats.items() if ems], key=lambda x: x[1], reverse=True)
@@ -258,7 +283,6 @@ def student_page():
         with st.form("quiz_form"):
             df, answers = st.session_state.current_df, {}
             df['ctx_tmp'] = df['context'].fillna('').astype(str).str.strip()
-            # FIX: Kiểm tra cột audio có tồn tại không
             if 'audio' in df.columns:
                 df['aud_tmp'] = df['audio'].fillna('').astype(str).str.strip()
                 df['group'] = ((df['ctx_tmp'] != df['ctx_tmp'].shift()) | (df['aud_tmp'] != df['aud_tmp'].shift())).cumsum()
