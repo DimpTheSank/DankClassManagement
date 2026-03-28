@@ -7,8 +7,8 @@ import requests
 import time
 from datetime import datetime
 
-# --- 1. CẤU HÌNH GIAO DIỆN & CSS (HIỆU ỨNG KÍNH LÚP) ---
-st.set_page_config(page_title="English Master Pro", layout="wide")
+# --- 1. CẤU HÌNH GIAO DIỆN & CSS (TỐI ƯU MOBILE & CHỐNG CHỌN ẢNH) ---
+st.set_page_config(page_title="Dank's class management", layout="wide")
 
 st.markdown("""
     <style>
@@ -26,36 +26,23 @@ st.markdown("""
     .wrong-ans { color: #dc3545; font-weight: bold; }
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
 
-    /* CSS ĐẶC TRỊ CHO MOBILE (CHỮ TO) */
+    /* CSS CHO MOBILE (CHỮ TO) */
     @media (max-width: 768px) {
         .context-display { font-size: 18px !important; }
         .stMarkdown p, .stRadio label { font-size: 18px !important; }
         div.stButton > button { height: 65px; font-size: 20px !important; }
     }
 
-    /* HIỆU ỨNG KÍNH LÚP VÀ CHẶN MENU TRÌNH DUYỆT */
+    /* VÔ HIỆU HOÁ THAO TÁC TRÊN ẢNH (CHỐNG HIỆN MENU TẢI XUỐNG) */
     img {
-        /* Chặn menu chuột phải và menu nhấn giữ trên mobile */
-        -webkit-touch-callout: none !important;
-        -webkit-user-select: none !important;
+        -webkit-touch-callout: none !important; /* Chặn menu nhấn giữ iOS/Android */
+        -webkit-user-select: none !important;    /* Chặn chọn ảnh */
         -khtml-user-select: none !important;
         -moz-user-select: none !important;
         -ms-user-select: none !important;
         user-select: none !important;
-        pointer-events: auto;
-        
-        /* Hiệu ứng chuyển động mượt */
-        transition: transform 0.2s ease-in-out;
-        cursor: crosshair;
+        pointer-events: none;                   /* Khiến ảnh không thể bị click/kéo */
         border-radius: 8px;
-    }
-
-    /* Khi chạm vào ảnh (Kính lúp) */
-    img:active {
-        transform: scale(2.2); /* Phóng to 2.2 lần */
-        z-index: 9999;
-        position: relative;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
     </style>
     
@@ -82,7 +69,6 @@ def get_drive_content(url):
 def display_drive_image(url):
     content = get_drive_content(url)
     if content:
-        # Quay về cách hiển thị đơn giản nhưng đã có CSS Kính lúp ở trên
         st.image(content, use_container_width=True)
 
 def display_drive_audio(url):
@@ -165,7 +151,6 @@ def teacher_page():
                 with st.expander(f"📝 {ex['title']}"):
                     c1, c2, c3 = st.columns([2, 1, 1])
                     c1.write(f"Loại: {ex['type']}")
-                    # TOGGLE QUYỀN REVIEW
                     perms = ex.get('review_permissions', {})
                     if c2.toggle("Cho phép Review", value=perms.get(selected_st, False), key=f"rev_{ex_id}_{selected_st}"):
                         perms[selected_st] = True
@@ -180,7 +165,6 @@ def teacher_page():
                         st.rerun()
 
     with tab_stats:
-        # (Giữ nguyên logic Dashboard split 2 bên đồ thị của bạn)
         chosen_students = st.multiselect("Chọn nhóm học sinh:", all_students)
         if chosen_students:
             student_ex_lists = []
@@ -313,7 +297,7 @@ def student_page():
         else: st.info("💡 Giáo viên chưa mở quyền Review.")
         if st.button("QUAY LẠI TRANG CHỦ"): st.session_state.view_mode = 'list'; st.rerun()
     elif st.session_state.view_mode == 'review':
-        st.title("🧐 Review"); df = st.session_state.current_df
+        st.title("🧐 Review đáp án"); df = st.session_state.current_df
         for i, r in df.iterrows():
             st.write(f"**Câu {i+1}: {r.get('question')}**")
             u_ans = st.session_state.user_answers.get(i)
