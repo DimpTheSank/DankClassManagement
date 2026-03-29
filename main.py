@@ -6,7 +6,7 @@ import re
 import requests
 import time
 from datetime import datetime
-import altair as alt # Thêm để vẽ biểu đồ đồng bộ scale
+import altair as alt
 
 # --- 1. CẤU HÌNH GIAO DIỆN & CSS ---
 st.set_page_config(page_title="Dank's class management", layout="wide")
@@ -46,7 +46,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. HÀM HỖ TRỢ ---
-
 def get_drive_url(url):
     if not url or not isinstance(url, str): return ""
     match = re.search(r'(?:d/|id=)([a-zA-Z0-9_-]{25,})', url)
@@ -210,27 +209,12 @@ def teacher_page():
                     
                     if summary:
                         df_s = pd.DataFrame(summary)
-                        y_limit = max(df_s['Cao nhất (%)'].max(), 10) # Lấy max của biểu đồ Cao nhất để làm scale
-                        
+                        y_limit = max(df_s['Cao nhất (%)'].max(), 10)
                         st.markdown("#### 📊 Tiến độ (%)")
                         c_l, c_h = st.columns(2)
-                        
-                        # Vẽ bằng Altair để ép chung trục Y (Shared Scale)
-                        chart_low = alt.Chart(df_s).mark_bar(color='#90caf9').encode(
-                            x=alt.X('Học sinh:N', title=None),
-                            y=alt.Y('Thấp nhất (%):Q', scale=alt.Scale(domain=[0, y_limit])),
-                            tooltip=['Học sinh', 'Thấp nhất (%)']
-                        ).properties(title="📉 Lần thấp nhất")
-                        
-                        chart_high = alt.Chart(df_s).mark_bar(color='#1565c0').encode(
-                            x=alt.X('Học sinh:N', title=None),
-                            y=alt.Y('Cao nhất (%):Q', scale=alt.Scale(domain=[0, y_limit])),
-                            tooltip=['Học sinh', 'Cao nhất (%)']
-                        ).properties(title="🏆 Lần cao nhất")
-                        
-                        c_l.altair_chart(chart_low, use_container_width=True)
-                        c_h.altair_chart(chart_high, use_container_width=True)
-
+                        chart_low = alt.Chart(df_s).mark_bar(color='#90caf9').encode(x=alt.X('Học sinh:N', title=None), y=alt.Y('Thấp nhất (%):Q', scale=alt.Scale(domain=[0, y_limit])), tooltip=['Học sinh', 'Thấp nhất (%)']).properties(title="📉 Lần thấp nhất")
+                        chart_high = alt.Chart(df_s).mark_bar(color='#1565c0').encode(x=alt.X('Học sinh:N', title=None), y=alt.Y('Cao nhất (%):Q', scale=alt.Scale(domain=[0, y_limit])), tooltip=['Học sinh', 'Cao nhất (%)']).properties(title="🏆 Lần cao nhất")
+                        c_l.altair_chart(chart_low, use_container_width=True); c_h.altair_chart(chart_high, use_container_width=True)
                         st.markdown("#### 🎯 Câu sai nhiều nhất")
                         cl, cr = st.columns([1, 1])
                         q_errs = sorted([(i, len(ems)) for i, ems in wrong_stats.items() if ems], key=lambda x: x[1], reverse=True)
@@ -257,25 +241,69 @@ def student_page():
     st.divider()
 
     if st.session_state.view_mode == 'list':
-        st.subheader("📚 Bài tập của bạn")
+        # --- 1. LẤY DỮ LIỆU BÀI TẬP VÀ LỊCH SỬ ---
         all_subs = [s.to_dict() for s in db.collection('submissions').where('student_email', '==', u_email).stream()]
-        exs = db.collection('exercises').where('assigned_to', 'array_contains', u_email).stream()
-        for doc in exs:
-            ex, ex_id = doc.to_dict(), doc.id
-            history = [s for s in all_subs if s.get('exercise_title') == ex['title']]
-            can_rev = ex.get('review_permissions', {}).get(u_email, False)
-            with st.container(border=True):
-                c1, c2 = st.columns([4, 1.5])
-                with c1:
-                    st.subheader(f"{ex['type']} - {ex['title']}")
-                    if history:
-                        scs = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
-                        st.markdown(f"🔢 Lần làm: `{len(history)}` | 📉 Thấp: `{min(scs)}` | 🏆 Cao: `{max(scs)}` / {history[0].get('score_raw','').split('/')[-1]}")
-                    else: st.markdown("🆕 *Chưa làm*")
-                with c2:
-                    st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
-                    if history and can_rev:
-                        st.button("Xem lại 🧐", key=f"rev_{ex_id}", on_click=start_review_direct_callback, args=(ex, history), use_container_width=True)
+        exs_stream = db.collection('exercises').where('assigned_to', 'array_contains', u_email).stream()
+        
+        ex_list = []
+        for doc in exs_stream:
+            ex_data = doc.to_dict()
+            ex_id = doc.id
+            history = [s for s in all_subs if s.get('exercise_title') == ex_data['title']]
+            is_done = len(history) > 0
+            created_at = ex_data.get('created_at', datetime.min)
+            # Chuyển created_at sang datetime nếu nó là Timestamp của Firebase
+            if hasattr(created_at, 'timestamp'): created_at = created_at.replace(tzinfo=None)
+            
+            ex_list.append({
+                'data': ex_data,
+                'id': ex_id,
+                'history': history,
+                'is_done': is_done,
+                'created_at': created_at
+            })
+
+        # --- 2. GIAO DIỆN BỘ LỌC ---
+        c_title, c_sort = st.columns([3, 1])
+        with c_title: st.subheader("📚 Bài tập của bạn")
+        with c_sort:
+            sort_option = st.selectbox(
+                "Sắp xếp theo:", 
+                ["Mới nhất", "Cũ nhất", "Ưu tiên chưa làm"], 
+                label_visibility="collapsed"
+            )
+
+        # --- 3. LOGIC SẮP XẾP ---
+        if sort_option == "Mới nhất":
+            ex_list.sort(key=lambda x: x['created_at'], reverse=True)
+        elif sort_option == "Cũ nhất":
+            ex_list.sort(key=lambda x: x['created_at'])
+        elif sort_option == "Ưu tiên chưa làm":
+            # Ưu tiên is_done=False trước, sau đó mới đến ngày mới nhất
+            ex_list.sort(key=lambda x: (x['is_done'], -x['created_at'].timestamp() if hasattr(x['created_at'], 'timestamp') else 0))
+
+        # --- 4. HIỂN THỊ DANH SÁCH ---
+        if not ex_list:
+            st.info("Hiện tại bạn không có bài tập nào.")
+        else:
+            for item in ex_list:
+                ex, ex_id, history = item['data'], item['id'], item['history']
+                can_rev = ex.get('review_permissions', {}).get(u_email, False)
+                
+                with st.container(border=True):
+                    c1, c2 = st.columns([4, 1.5])
+                    with c1:
+                        st.subheader(f"{ex['type']} - {ex['title']}")
+                        date_str = item['created_at'].strftime("%d/%m/%Y") if item['created_at'] != datetime.min else "N/A"
+                        if history:
+                            scs = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
+                            st.markdown(f"📅 Giao ngày: `{date_str}` | 🔢 Lần làm: `{len(history)}` | 📉 Thấp: `{min(scs)}` | 🏆 Cao: `{max(scs)}` / {history[0].get('score_raw','').split('/')[-1]}")
+                        else:
+                            st.markdown(f"📅 Giao ngày: `{date_str}` | 🆕 **Chưa làm**")
+                    with c2:
+                        st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
+                        if history and can_rev:
+                            st.button("Xem lại 🧐", key=f"rev_{ex_id}", on_click=start_review_direct_callback, args=(ex, history), use_container_width=True)
 
     elif st.session_state.view_mode == 'quiz':
         st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
@@ -289,15 +317,12 @@ def student_page():
             else:
                 df['aud_tmp'] = ""
                 df['group'] = (df['ctx_tmp'] != df['ctx_tmp'].shift()).cumsum()
-            
             last_audio_rendered = None
             for _, group_df in df.groupby('group'):
                 first = group_df.iloc[0]
                 curr_aud = str(first.get('aud_tmp')).strip()
                 if curr_aud != "" and curr_aud != last_audio_rendered:
-                    display_drive_audio(curr_aud)
-                    last_audio_rendered = curr_aud
-                
+                    display_drive_audio(curr_aud); last_audio_rendered = curr_aud
                 ctx = clean_nan(first.get('context'))
                 if ctx.lower() in [" ", "nan", "none"]:
                     for i, r in group_df.iterrows():
@@ -342,7 +367,6 @@ def student_page():
         else:
             df['aud_tmp'] = ""
             df['group'] = (df['ctx_tmp'] != df['ctx_tmp'].shift()).cumsum()
-        
         last_audio_review = None
         for _, group_df in df.groupby('group'):
             first = group_df.iloc[0]
@@ -362,11 +386,11 @@ def student_page():
                     with st.container(height=650):
                         for i, r in group_df.iterrows():
                             st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
-                            u_ans = st.session_state.user_answers.get(i); ck_letter = str(r.get('correct_ans')).strip().upper()
+                            u_ans = st.session_state.user_answers.get(i); ck_let = str(r.get('correct_ans')).strip().upper()
                             opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
                             for let, txt in opts.items():
                                 if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
-                                is_cor, is_mi = (let == ck_letter), (txt == u_ans)
+                                is_cor, is_mi = (let == ck_let), (txt == u_ans)
                                 if is_cor and is_mi: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
                                 elif is_cor: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
                                 elif is_mi: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
@@ -386,7 +410,6 @@ def student_page():
                         elif txt == u_ans: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
                         else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
                     st.divider()
-
         st.button("XONG", on_click=lambda: st.session_state.update({"view_mode":"list"}), use_container_width=True)
 
 # --- 6. ĐIỀU HƯỚNG ---
