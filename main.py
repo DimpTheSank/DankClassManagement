@@ -25,7 +25,6 @@ st.markdown("""
     .correct-box { border: 2px solid #28a745; background-color: #e8f5e9; padding: 10px; border-radius: 10px; margin-bottom: 5px; }
     .wrong-box { border: 2px solid #dc3545; background-color: #ffebee; padding: 10px; border-radius: 10px; margin-bottom: 5px; }
     .normal-box { border: 1px solid #ddd; padding: 10px; border-radius: 10px; margin-bottom: 5px; color: #666; }
-    .transcript-box { background-color: #f0f7ff; border-left: 5px solid #1565c0; padding: 15px; margin-top: 10px; border-radius: 5px; font-style: italic; color: #0d47a1; }
     
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
 
@@ -35,7 +34,13 @@ st.markdown("""
         div.stButton > button { height: 60px; font-size: 18px !important; margin-bottom: 10px; }
     }
 
-    img { -webkit-touch-callout: none !important; -webkit-user-select: none !important; user-select: none !important; pointer-events: none; border-radius: 8px; }
+    img {
+        -webkit-touch-callout: none !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+        pointer-events: none;
+        border-radius: 8px;
+    }
     </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     """, unsafe_allow_html=True)
@@ -78,26 +83,24 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 4. HÀM XỬ LÝ DRAFT (BẢN NHÁP) ---
-def save_draft(student_email, exercise_id, answers):
-    # Lưu vào collection 'drafts'
-    draft_id = f"{student_email}_{exercise_id}"
+# --- 4. HÀM XỬ LÝ LƯU TẠM (DRAFTS) ---
+def save_draft(u_email, ex_id, answers):
+    draft_id = f"{u_email}_{ex_id}"
     db.collection('drafts').document(draft_id).set({
         'answers': {str(k): v for k, v in answers.items()},
         'updated_at': firestore.SERVER_TIMESTAMP
     })
 
-def get_draft(student_email, exercise_id):
-    draft_id = f"{student_email}_{exercise_id}"
+def get_draft(u_email, ex_id):
+    draft_id = f"{u_email}_{ex_id}"
     doc = db.collection('drafts').document(draft_id).get()
     if doc.exists:
         data = doc.to_dict().get('answers', {})
         return {int(k): v for k, v in data.items()}
     return {}
 
-def delete_draft(student_email, exercise_id):
-    draft_id = f"{student_email}_{exercise_id}"
-    db.collection('drafts').document(draft_id).delete()
+def delete_draft(u_email, ex_id):
+    db.collection('drafts').document(f"{u_email}_{ex_id}").delete()
 
 # --- 5. QUẢN LÝ SESSION ---
 if 'user' not in st.session_state: st.session_state.user = None
@@ -115,7 +118,7 @@ def start_lesson_callback(ex, ex_id):
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df, st.session_state.current_ex_info = df, ex
         st.session_state.current_ex_id, st.session_state.view_mode = ex_id, 'quiz'
-        # KHÔI PHỤC BẢN NHÁP NẾU CÓ
+        # Khôi phục bài đang làm dở
         st.session_state.user_answers = get_draft(st.session_state.user['email'], ex_id)
     except: st.error("Lỗi nạp bài.")
 
@@ -147,10 +150,10 @@ def login_page():
             else: st.error("Email không tồn tại.")
 
 def teacher_page():
-    # (Phần Tab giáo viên giữ nguyên như bản trước)
     st.sidebar.button("Đăng xuất", on_click=logout)
     st.title("👨‍🏫 Quản lý Học viên")
     t1, t2, t3 = st.tabs(["📤 Giao bài", "👥 Quản lý", "📊 Thống kê"])
+    
     with t1:
         with st.expander("Giao bài tập mới", expanded=True):
             students = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
@@ -160,6 +163,7 @@ def teacher_page():
             if st.button("🚀 Đăng bài", use_container_width=True):
                 db.collection('exercises').add({'title': title, 'type': ex_type, 'excel_link': link, 'assigned_to': assigned, 'created_at': firestore.SERVER_TIMESTAMP, 'review_permissions': {e: False for e in assigned}})
                 st.success("Đã đăng bài!")
+    
     with t2:
         all_st_ids = [s.id for s in db.collection('users').where('role', '==', 'student').stream()]
         sel_st = st.selectbox("Chọn học sinh:", ["-- Chọn --"] + all_st_ids)
@@ -182,6 +186,7 @@ def teacher_page():
                         if not new_a: db.collection('exercises').document(ex_id).delete()
                         else: db.collection('exercises').document(ex_id).update({'assigned_to': new_a})
                         st.rerun()
+    
     with t3:
         all_users = {u.id: u.to_dict().get('full_name', u.id) for u in db.collection('users').stream()}
         all_st_ids = [k for k, v in all_users.items()]
@@ -244,8 +249,9 @@ def student_page():
             if hasattr(created_at, 'timestamp'): created_at = created_at.replace(tzinfo=None)
             ex_list.append({'data': ex_data, 'id': ex_id, 'history': history, 'is_done': is_done, 'has_draft': has_draft, 'created_at': created_at})
 
-        sort_option = st.selectbox("Sắp xếp:", ["Mới nhất", "Ưu tiên chưa làm"], label_visibility="collapsed")
+        sort_option = st.selectbox("Sắp xếp theo:", ["Mới nhất", "Cũ nhất", "Ưu tiên chưa làm"], label_visibility="collapsed")
         if sort_option == "Mới nhất": ex_list.sort(key=lambda x: x['created_at'], reverse=True)
+        elif sort_option == "Cũ nhất": ex_list.sort(key=lambda x: x['created_at'])
         else: ex_list.sort(key=lambda x: (x['is_done'], -x['created_at'].timestamp() if hasattr(x['created_at'], 'timestamp') else 0))
 
         for item in ex_list:
@@ -254,8 +260,14 @@ def student_page():
                 c1, c2 = st.columns([4, 1.5])
                 with c1:
                     st.subheader(f"{ex['type']} - {ex['title']}")
-                    if item['has_draft'] and not item['is_done']: st.warning("🟠 *Đang làm dở - Hệ thống đã lưu bài làm của bạn*")
-                    elif not item['is_done']: st.info("🆕 *Chưa làm*")
+                    date_str = item['created_at'].strftime("%d/%m/%Y") if item['created_at'] != datetime.min else "N/A"
+                    if item['has_draft'] and not item['is_done']:
+                        st.warning(f"📅 Giao ngày: `{date_str}` | 🟠 *Đang làm dở - Hệ thống đã lưu bài*")
+                    elif history:
+                        scs = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
+                        st.markdown(f"📅 Giao ngày: `{date_str}` | 🔢 Lần làm: `{len(history)}` | 📉 Thấp: `{min(scs)}` | 🏆 Cao: `{max(scs)}` / {history[0].get('score_raw','').split('/')[-1]}")
+                    else:
+                        st.markdown(f"📅 Giao ngày: `{date_str}` | 🆕 **Chưa làm**")
                 with c2:
                     st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
                     if history and ex.get('review_permissions', {}).get(u_email, False):
@@ -265,7 +277,7 @@ def student_page():
         st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
         if st.button("⬅ Thoát (Bài làm sẽ được lưu tự động)"): st.session_state.view_mode = 'list'; st.rerun()
         
-        # --- KHÔNG DÙNG st.form ĐỂ TỰ ĐỘNG LƯU ---
+        # --- BỎ st.form ĐỂ TỰ ĐỘNG LƯU NGAY LẬP TỨC ---
         df = st.session_state.current_df
         df['ctx_tmp'] = df['context'].fillna('').astype(str).str.strip()
         if 'audio' in df.columns:
@@ -274,25 +286,21 @@ def student_page():
         else:
             df['aud_tmp'] = ""; df['group'] = (df['ctx_tmp'] != df['ctx_tmp'].shift()).cumsum()
         
-        last_aud = None
+        last_audio_rendered = None
         for _, group_df in df.groupby('group'):
             first = group_df.iloc[0]
             curr_aud = str(first.get('aud_tmp')).strip()
-            if curr_aud != "" and curr_aud != last_aud:
-                display_drive_audio(curr_aud); last_aud = curr_aud
+            if curr_aud != "" and curr_aud != last_audio_rendered:
+                display_drive_audio(curr_aud); last_audio_rendered = curr_aud
             
             ctx = clean_nan(first.get('context'))
-            # HIỂN THỊ CÂU HỎI
             if ctx.lower() in [" ", "nan", "none"]:
                 for i, r in group_df.iterrows():
                     st.write(f"**Câu {i+1}: {clean_nan(r.get('question','Listen'))}**")
                     opts = [clean_nan(r.get(f'opt_{let}')) for let in ['a','b','c','d'] if clean_nan(r.get(f'opt_{let}')) != " " and clean_nan(r.get(f'opt_{let}')).upper() != "NONE"]
-                    
-                    # Lấy đáp án đã chọn từ session hoặc nháp
                     current_val = st.session_state.user_answers.get(i)
                     sel = st.radio(f"q{i}", opts, key=f"radio_{i}", index=opts.index(current_val) if current_val in opts else None, label_visibility="collapsed")
-                    
-                    # TỰ ĐỘNG LƯU KHI CHỌN
+                    # TỰ ĐỘNG LƯU KHI CÓ THAY ĐỔI
                     if sel != current_val:
                         st.session_state.user_answers[i] = sel
                         save_draft(u_email, st.session_state.current_ex_id, st.session_state.user_answers)
@@ -310,23 +318,17 @@ def student_page():
                         for i, r in group_df.iterrows():
                             st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
                             opts = [clean_nan(r.get(f'opt_{let}')) for let in ['a','b','c','d'] if clean_nan(r.get(f'opt_{let}')) != " " and clean_nan(r.get(f'opt_{let}')).upper() != "NONE"]
-                            
                             current_val = st.session_state.user_answers.get(i)
                             sel = st.radio(f"q{i}", opts, key=f"radio_{i}", index=opts.index(current_val) if current_val in opts else None, label_visibility="collapsed")
-                            
                             if sel != current_val:
                                 st.session_state.user_answers[i] = sel
                                 save_draft(u_email, st.session_state.current_ex_id, st.session_state.user_answers)
                             st.write("---")
 
-        if st.button("Nộp bài 🏁 (Hoàn thành bài tập)", use_container_width=True, type="primary"):
-            if len(st.session_state.user_answers) < len(df):
-                st.warning(f"⚠️ Bạn mới làm {len(st.session_state.user_answers)}/{len(df)} câu. Bạn có chắc muốn nộp không?")
-            
+        if st.button("Nộp bài 🏁", use_container_width=True, type="primary"):
             correct = sum(1 for i, r in df.iterrows() if {clean_nan(r.get('opt_a')):'A', clean_nan(r.get('opt_b')):'B', clean_nan(r.get('opt_c')):'C', clean_nan(r.get('opt_d')):'D'}.get(st.session_state.user_answers.get(i)) == str(r.get('correct_ans','')).strip().upper())
             st.session_state.res = f"{correct}/{len(df)}"
             db.collection('submissions').add({'student_email':u_email, 'exercise_title':st.session_state.current_ex_info['title'], 'score_raw':st.session_state.res, 'user_answers': {str(k): v for k, v in st.session_state.user_answers.items()}, 'submitted_at':datetime.now()})
-            
             # XÓA BẢN NHÁP SAU KHI NỘP THÀNH CÔNG
             delete_draft(u_email, st.session_state.current_ex_id)
             st.session_state.view_mode = 'res'; st.rerun()
@@ -337,7 +339,6 @@ def student_page():
         if st.button("QUAY LẠI TRANG CHỦ"): st.session_state.view_mode = 'list'; st.rerun()
 
     elif st.session_state.view_mode == 'review':
-        # (Phần Review giữ nguyên như bản trước)
         st.title("🧐 Review đáp án chi tiết")
         if st.button("⬅ Quay lại danh sách"): st.session_state.view_mode = 'list'; st.rerun()
         df = st.session_state.current_df
@@ -347,8 +348,7 @@ def student_page():
             df['group'] = ((df['ctx_tmp'] != df['ctx_tmp'].shift()) | (df['aud_tmp'] != df['aud_tmp'].shift())).cumsum()
         else:
             df['aud_tmp'] = ""; df['group'] = (df['ctx_tmp'] != df['ctx_tmp'].shift()).cumsum()
-        
-        last_aud_rev = None
+        last_audio_review = None
         for _, group_df in df.groupby('group'):
             first = group_df.iloc[0]
             ctx = clean_nan(first.get('context'))
@@ -358,8 +358,8 @@ def student_page():
                 l_rev, r_rev = st.columns([1, 1])
                 with l_rev:
                     with st.container(height=650):
-                        if curr_aud != "" and curr_aud != last_aud_rev:
-                            display_drive_audio(curr_aud); last_aud_rev = curr_aud
+                        if curr_aud != "" and curr_aud != last_audio_review:
+                            display_drive_audio(curr_aud); last_audio_review = curr_aud
                         for p in ctx.split(";;"):
                             if p.strip().startswith("http"): display_drive_image(p.strip())
                             else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
@@ -372,30 +372,24 @@ def student_page():
                             for let, txt in opts.items():
                                 if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
                                 is_cor, is_mi = (let == ck_let), (txt == u_ans)
-                                if is_cor and is_mi: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Đúng)</div>', unsafe_allow_html=True)
+                                if is_cor and is_mi: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
                                 elif is_cor: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
                                 elif is_mi: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
                                 else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
-                            if 'transcript' in df.columns:
-                                ts = clean_nan(r.get('transcript'))
-                                if ts != " ": st.markdown(f'<div class="transcript-box">📝 <b>Transcript:</b><br>{ts}</div>', unsafe_allow_html=True)
                             st.write("---")
             else:
-                if curr_aud != "" and curr_aud != last_aud_rev:
-                    display_drive_audio(curr_aud); last_aud_rev = curr_aud
+                if curr_aud != "" and curr_aud != last_audio_review:
+                    display_drive_audio(curr_aud); last_audio_review = curr_aud
                 for i, r in group_df.iterrows():
                     st.write(f"**Câu {i+1}: {clean_nan(r.get('question','Listen'))}**")
                     u_ans, ck_let = st.session_state.user_answers.get(i), str(r.get('correct_ans')).strip().upper()
                     opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
                     for let, txt in opts.items():
                         if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
-                        if let == ck_let and txt == u_ans: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b></div>', unsafe_allow_html=True)
-                        elif let == ck_let: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b></div>', unsafe_allow_html=True)
-                        elif txt == u_ans: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b></div>', unsafe_allow_html=True)
+                        if let == ck_let and txt == u_ans: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
+                        elif let == ck_let: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
+                        elif txt == u_ans: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
                         else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
-                    if 'transcript' in df.columns:
-                        ts = clean_nan(r.get('transcript'))
-                        if ts != " ": st.markdown(f'<div class="transcript-box">📝 <b>Transcript:</b><br>{ts}</div>', unsafe_allow_html=True)
                     st.divider()
         st.button("XONG", on_click=lambda: st.session_state.update({"view_mode":"list"}), use_container_width=True)
 
