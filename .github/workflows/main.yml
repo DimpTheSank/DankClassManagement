@@ -10,4 +10,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping Streamlit App
-        run: curl -I https://TEN-APP-CUA-BAN.streamlit.app
+        run: curl -I https://dankclassmanagement.streamlit.app
