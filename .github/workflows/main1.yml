@@ -16,4 +16,4 @@ jobs:
       - name: Install Playwright
         run: npx playwright install chromium --with-deps
       - name: Open Streamlit App
-        run: npx playwright codegen --target javascript -o /dev/null https://your-app.streamlit.app --timeout 60000
+        run: npx playwright codegen --target javascript -o /dev/null https://https://dankclassmanagement.streamlit.app/ --timeout 60000
