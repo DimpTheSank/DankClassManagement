@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import datetime
 import altair as alt
+from google.cloud.firestore import FieldPath
 
 # --- 1. CẤU HÌNH GIAO DIỆN & CSS ---
 st.set_page_config(page_title="Dank's class management", layout="wide")
@@ -94,27 +95,33 @@ def delete_draft(u_account, ex_id):
     db.collection('drafts').document(f"{u_account}_{ex_id}").delete()
 
 def save_note(u_acc, ex_id, g_id, text):
+    if not ex_id: return
     note_id = f"{u_acc}_{ex_id}_{g_id}"
-    db.collection('notes').document(note_id).set({'content': text, 'updated_at': firestore.SERVER_TIMESTAMP})
-
-# --- Cập nhật lại hàm get_notes để chính xác tuyệt đối ---
+    db.collection('notes').document(note_id).set({
+        'content': text, 
+        'updated_at': firestore.SERVER_TIMESTAMP
+    })
+    
 def get_notes(u_acc, ex_id):
     notes = {}
     try:
-        # Tạo tiền tố ID chính xác
         prefix = f"{u_acc}_{ex_id}_"
-        # Truy vấn tất cả các note có ID bắt đầu bằng tiền tố này
-        docs = db.collection('notes').where(firestore.FieldPath.document_id(), '>=', prefix).where(firestore.FieldPath.document_id(), '<=', prefix + '\uf8ff').stream()
+        # Sử dụng FieldPath.document_id() từ thư viện vừa import
+        docs = db.collection('notes').where(FieldPath.document_id(), '>=', prefix).where(FieldPath.document_id(), '<=', prefix + '\uf8ff').stream()
+        
         for doc in docs:
-            # Lấy group_id từ phần cuối cùng của document ID
+            # Tách ID để lấy số nhóm (group_id) ở cuối
+            # Ví dụ: "dang@gmail.com_ex123_1" -> lấy số 1
             parts = doc.id.split('_')
-            gid_str = parts[-1] 
-            if gid_str.isdigit():
-                notes[int(gid_str)] = doc.to_dict().get('content', "")
+            if parts:
+                gid_str = parts[-1]
+                if gid_str.isdigit():
+                    notes[int(gid_str)] = doc.to_dict().get('content', "")
     except Exception as e:
-        st.sidebar.error(f"Lỗi nạp ghi chú: {e}")
+        # Không dùng st.error ở đây để tránh hiện thông báo lỗi đỏ làm học sinh hoảng
+        print(f"Lỗi nạp ghi chú: {e}") 
     return notes
-
+    
 # --- 5. QUẢN LÝ SESSION & CALLBACKS ---
 if 'user' not in st.session_state: st.session_state.user = None
 if 'view_mode' not in st.session_state: st.session_state.view_mode = 'list'
@@ -132,33 +139,31 @@ def start_lesson_callback(ex, ex_id):
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
         st.session_state.current_ex_info = ex
-        st.session_state.current_ex_id = ex_id # Lưu ID chuẩn vào session
+        st.session_state.current_ex_id = ex_id # Luôn giữ ID bài tập
         st.session_state.view_mode = 'quiz'
         
-        # Nạp dữ liệu cá nhân
         acc = st.session_state.user['account']
         st.session_state.user_answers = get_draft(acc, ex_id)
+        # Nạp Note ngay khi mở bài
         st.session_state.user_notes = get_notes(acc, ex_id)
     except Exception as e:
-        st.error(f"Không thể nạp bài tập: {e}")
+        st.error(f"Lỗi: {e}")
 
 def start_review_direct_callback(ex, ex_id, history):
     try:
         df = pd.read_excel(get_drive_url(ex['excel_link']))
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
-        st.session_state.current_ex_info = ex
-        st.session_state.current_ex_id = ex_id # Phải gán ID ở đây
+        st.session_state.current_ex_id = ex_id
         
         latest_sub = max(history, key=lambda x: x['submitted_at'])
         st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
-        
-        # Nạp Note dựa trên ex_id truyền vào
+        # Nạp lại Note để học sinh xem lại
         st.session_state.user_notes = get_notes(st.session_state.user['account'], ex_id)
         st.session_state.view_mode = 'review'
     except Exception as e:
-        st.error(f"Lỗi nạp Review: {e}")
-
+        st.error(f"Lỗi Review: {e}")
+        
 # --- 6. CÁC TRANG ---
 def login_page():
     st.markdown('<h1 style="text-align: center;">🔑 Đăng nhập Hệ thống</h1>', unsafe_allow_html=True)
