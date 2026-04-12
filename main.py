@@ -29,9 +29,7 @@ st.markdown("""
     .normal-box { border: 1px solid #ddd; padding: 10px; border-radius: 10px; margin-bottom: 5px; color: #666; }
     .transcript-box { background-color: #f0f7ff; border-left: 5px solid #1565c0; padding: 15px; margin-top: 10px; border-radius: 5px; font-style: italic; color: #0d47a1; }
     
-    /* Tối ưu ô ghi chú */
     .stTextArea textarea { border: 2px solid #1565c0 !important; }
-
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
     @media (max-width: 768px) {
         .context-display { font-size: 19px !important; }
@@ -79,7 +77,7 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 4. HÀM XỬ LÝ LƯU TẠM & GHI CHÚ ---
+# --- 4. HÀM XỬ LÝ DRAFTS & NOTES ---
 def save_draft(u_account, ex_id, answers):
     db.collection('drafts').document(f"{u_account}_{ex_id}").set({
         'answers': {str(k): v for k, v in answers.items()},
@@ -87,8 +85,10 @@ def save_draft(u_account, ex_id, answers):
     })
 
 def get_draft(u_account, ex_id):
-    doc = db.collection('drafts').document(f"{u_account}_{ex_id}").get()
-    return {int(k): v for k, v in doc.to_dict().get('answers', {}).items()} if doc.exists else {}
+    try:
+        doc = db.collection('drafts').document(f"{u_account}_{ex_id}").get()
+        return {int(k): v for k, v in doc.to_dict().get('answers', {}).items()} if doc.exists else {}
+    except: return {}
 
 def delete_draft(u_account, ex_id):
     db.collection('drafts').document(f"{u_account}_{ex_id}").delete()
@@ -99,14 +99,19 @@ def save_note(u_acc, ex_id, g_id, text):
 
 def get_notes(u_acc, ex_id):
     notes = {}
-    prefix = f"{u_acc}_{ex_id}_"
-    docs = db.collection('notes').where(firestore.FieldPath.document_id(), '>=', prefix).where(firestore.FieldPath.document_id(), '<=', prefix + '\uf8ff').stream()
-    for doc in docs:
-        gid = doc.id.replace(prefix, "")
-        if gid.isdigit(): notes[int(gid)] = doc.to_dict().get('content', "")
+    try:
+        prefix = f"{u_acc}_{ex_id}_"
+        docs = db.collection('notes').where(firestore.FieldPath.document_id(), '>=', prefix).where(firestore.FieldPath.document_id(), '<=', prefix + '\uf8ff').stream()
+        for doc in docs:
+            # Lấy phần g_id ở cuối ID document
+            parts = doc.id.split('_')
+            if parts:
+                gid_str = parts[-1]
+                if gid_str.isdigit(): notes[int(gid_str)] = doc.to_dict().get('content', "")
+    except: pass # Nếu lỗi note thì trả về rỗng để không treo App
     return notes
 
-# --- 5. QUẢN LÝ SESSION ---
+# --- 5. QUẢN LÝ SESSION & CALLBACKS ---
 if 'user' not in st.session_state: st.session_state.user = None
 if 'view_mode' not in st.session_state: st.session_state.view_mode = 'list'
 if 'current_df' not in st.session_state: st.session_state.current_df = None
@@ -118,23 +123,38 @@ def logout():
     st.rerun()
 
 def start_lesson_callback(ex, ex_id):
+    # Ưu tiên nạp bài tập trước
     try:
-        df = pd.read_excel(get_drive_url(ex['excel_link']))
+        direct_link = get_drive_url(ex['excel_link'])
+        df = pd.read_excel(direct_link)
         df.columns = [str(c).strip().lower() for c in df.columns]
-        st.session_state.current_df, st.session_state.current_ex_info = df, ex
-        st.session_state.current_ex_id, st.session_state.view_mode = ex_id, 'quiz'
-        st.session_state.user_answers = get_draft(st.session_state.user['account'], ex_id)
-        st.session_state.user_notes = get_notes(st.session_state.user['account'], ex_id)
-    except: st.error("Lỗi nạp bài.")
+        st.session_state.current_df = df
+        st.session_state.current_ex_info = ex
+        st.session_state.current_ex_id = ex_id
+        st.session_state.view_mode = 'quiz'
+    except Exception as e:
+        st.error(f"Lỗi nạp file Excel: {e}")
+        return
 
-def start_review_direct_callback(ex, history):
+    # Nạp Draft và Note sau (Nếu lỗi cũng không làm dừng chương trình)
+    try:
+        acc = st.session_state.user['account']
+        st.session_state.user_answers = get_draft(acc, ex_id)
+        st.session_state.user_notes = get_notes(acc, ex_id)
+    except:
+        st.session_state.user_answers = {}
+        st.session_state.user_notes = {}
+
+def start_review_direct_callback(ex, ex_id, history):
     try:
         df = pd.read_excel(get_drive_url(ex['excel_link']))
         df.columns = [str(c).strip().lower() for c in df.columns]
-        st.session_state.current_df, st.session_state.current_ex_info = df, ex
+        st.session_state.current_df = df
+        st.session_state.current_ex_info = ex
+        st.session_state.current_ex_id = ex_id
         latest_sub = max(history, key=lambda x: x['submitted_at'])
         st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
-        st.session_state.user_notes = get_notes(st.session_state.user['account'], ex.get('id', 'temp'))
+        st.session_state.user_notes = get_notes(st.session_state.user['account'], ex_id)
         st.session_state.view_mode = 'review'
     except: st.error("Lỗi nạp dữ liệu Review.")
 
@@ -288,7 +308,7 @@ def student_page():
                 with c2:
                     st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
                     if history and ex.get('review_permissions', {}).get(u_acc, False):
-                        st.button("Xem lại 🧐", key=f"rev_{ex_id}", on_click=start_review_direct_callback, args=(ex, history), use_container_width=True)
+                        st.button("Xem lại 🧐", key=f"rev_{ex_id}", on_click=start_review_direct_callback, args=(ex, ex_id, history), use_container_width=True)
 
     elif st.session_state.view_mode == 'quiz':
         st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
@@ -307,7 +327,6 @@ def student_page():
             curr_aud = str(first.get('aud_tmp')).strip()
             if curr_aud != "" and curr_aud != last_aud: display_drive_audio(curr_aud); last_aud = curr_aud
             
-            # --- VỊ TRÍ GHI CHÚ MỚI: NGAY TRÊN CẢ CONTEXT VÀ QUESTIONS ---
             curr_note = st.session_state.user_notes.get(g_id, "")
             note_input = st.text_area("📝 Ghi chú / Chiến thuật cho nhóm câu hỏi này:", value=curr_note, key=f"note_{g_id}", height=150, max_chars=500, placeholder="Ghi chú lại từ vựng hoặc mẹo giải đoạn này...")
             if note_input != curr_note:
@@ -317,12 +336,12 @@ def student_page():
             ctx = clean_nan(first.get('context'))
             l, r_col = st.columns([1, 1])
             with l:
-                with st.container(height=900):
+                with st.container(height=750):
                     for p in ctx.split(";;"):
                         if p.strip().startswith("http"): display_drive_image(p.strip())
                         else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
             with r_col:
-                with st.container(height=900):
+                with st.container(height=750):
                     for i, r in group_df.iterrows():
                         st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
                         opts = [clean_nan(r.get(f'opt_{let}')) for let in ['a','b','c','d'] if clean_nan(r.get(f'opt_{let}')) != " " and clean_nan(r.get(f'opt_{let}')).upper() != "NONE"]
@@ -362,23 +381,21 @@ def student_page():
         for g_id, group_df in df.groupby('group'):
             first = group_df.iloc[0]
             ctx, curr_aud = clean_nan(first.get('context')), str(first.get('aud_tmp')).strip()
-            
-            # --- HIỂN THỊ NOTE TRONG PHẦN REVIEW (CŨNG NẰM TRÊN CÙNG) ---
             curr_note = st.session_state.user_notes.get(g_id, "")
             note_rev = st.text_area("📝 Ghi chú của bạn:", value=curr_note, key=f"note_rev_{g_id}", height=150, max_chars=500)
             if note_rev != curr_note:
                 st.session_state.user_notes[g_id] = note_rev
-                save_note(u_acc, st.session_state.current_ex_info.get('id', 'temp'), g_id, note_rev)
+                save_note(u_acc, st.session_state.current_ex_id, g_id, note_rev)
             
             l_rev, r_rev = st.columns([1, 1])
             with l_rev:
-                with st.container(height=900):
+                with st.container(height=750):
                     if curr_aud != "" and curr_aud != last_audio_review: display_drive_audio(curr_aud); last_audio_review = curr_aud
                     for p in ctx.split(";;"):
                         if p.strip().startswith("http"): display_drive_image(p.strip())
                         else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
             with r_rev:
-                with st.container(height=900):
+                with st.container(height=750):
                     for i, r in group_df.iterrows():
                         st.write(f"**Câu {i+1}: {clean_nan(r.get('question'))}**")
                         u_ans, ck_let = st.session_state.user_answers.get(i), str(r.get('correct_ans')).strip().upper()
