@@ -97,18 +97,22 @@ def save_note(u_acc, ex_id, g_id, text):
     note_id = f"{u_acc}_{ex_id}_{g_id}"
     db.collection('notes').document(note_id).set({'content': text, 'updated_at': firestore.SERVER_TIMESTAMP})
 
+# --- Cập nhật lại hàm get_notes để chính xác tuyệt đối ---
 def get_notes(u_acc, ex_id):
     notes = {}
     try:
+        # Tạo tiền tố ID chính xác
         prefix = f"{u_acc}_{ex_id}_"
+        # Truy vấn tất cả các note có ID bắt đầu bằng tiền tố này
         docs = db.collection('notes').where(firestore.FieldPath.document_id(), '>=', prefix).where(firestore.FieldPath.document_id(), '<=', prefix + '\uf8ff').stream()
         for doc in docs:
-            # Lấy phần g_id ở cuối ID document
+            # Lấy group_id từ phần cuối cùng của document ID
             parts = doc.id.split('_')
-            if parts:
-                gid_str = parts[-1]
-                if gid_str.isdigit(): notes[int(gid_str)] = doc.to_dict().get('content', "")
-    except: pass # Nếu lỗi note thì trả về rỗng để không treo App
+            gid_str = parts[-1] 
+            if gid_str.isdigit():
+                notes[int(gid_str)] = doc.to_dict().get('content', "")
+    except Exception as e:
+        st.sidebar.error(f"Lỗi nạp ghi chú: {e}")
     return notes
 
 # --- 5. QUẢN LÝ SESSION & CALLBACKS ---
@@ -123,27 +127,20 @@ def logout():
     st.rerun()
 
 def start_lesson_callback(ex, ex_id):
-    # Ưu tiên nạp bài tập trước
     try:
-        direct_link = get_drive_url(ex['excel_link'])
-        df = pd.read_excel(direct_link)
+        df = pd.read_excel(get_drive_url(ex['excel_link']))
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
         st.session_state.current_ex_info = ex
-        st.session_state.current_ex_id = ex_id
+        st.session_state.current_ex_id = ex_id # Lưu ID chuẩn vào session
         st.session_state.view_mode = 'quiz'
-    except Exception as e:
-        st.error(f"Lỗi nạp file Excel: {e}")
-        return
-
-    # Nạp Draft và Note sau (Nếu lỗi cũng không làm dừng chương trình)
-    try:
+        
+        # Nạp dữ liệu cá nhân
         acc = st.session_state.user['account']
         st.session_state.user_answers = get_draft(acc, ex_id)
         st.session_state.user_notes = get_notes(acc, ex_id)
-    except:
-        st.session_state.user_answers = {}
-        st.session_state.user_notes = {}
+    except Exception as e:
+        st.error(f"Không thể nạp bài tập: {e}")
 
 def start_review_direct_callback(ex, ex_id, history):
     try:
@@ -151,12 +148,16 @@ def start_review_direct_callback(ex, ex_id, history):
         df.columns = [str(c).strip().lower() for c in df.columns]
         st.session_state.current_df = df
         st.session_state.current_ex_info = ex
-        st.session_state.current_ex_id = ex_id
+        st.session_state.current_ex_id = ex_id # Phải gán ID ở đây
+        
         latest_sub = max(history, key=lambda x: x['submitted_at'])
         st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
+        
+        # Nạp Note dựa trên ex_id truyền vào
         st.session_state.user_notes = get_notes(st.session_state.user['account'], ex_id)
         st.session_state.view_mode = 'review'
-    except: st.error("Lỗi nạp dữ liệu Review.")
+    except Exception as e:
+        st.error(f"Lỗi nạp Review: {e}")
 
 # --- 6. CÁC TRANG ---
 def login_page():
@@ -328,10 +329,11 @@ def student_page():
             if curr_aud != "" and curr_aud != last_aud: display_drive_audio(curr_aud); last_aud = curr_aud
             
             curr_note = st.session_state.user_notes.get(g_id, "")
-            note_input = st.text_area("📝 Ghi chú / Chiến thuật cho nhóm câu hỏi này:", value=curr_note, key=f"note_{g_id}", height=150, max_chars=500, placeholder="Ghi chú lại từ vựng hoặc mẹo giải đoạn này...")
+            note_input = st.text_area("📝 Ghi chú / Chiến thuật cho nhóm câu hỏi này:", value=curr_note, key=f"note_{g_id}", height=150, max_chars=500)
             if note_input != curr_note:
                 st.session_state.user_notes[g_id] = note_input
                 save_note(u_acc, st.session_state.current_ex_id, g_id, note_input)
+                st.toast("Đã lưu ghi chú!", icon="💾")
             
             ctx = clean_nan(first.get('context'))
             l, r_col = st.columns([1, 1])
