@@ -29,13 +29,16 @@ st.markdown("""
     .normal-box { border: 1px solid #ddd; padding: 10px; border-radius: 10px; margin-bottom: 5px; color: #666; }
     .transcript-box { background-color: #f0f7ff; border-left: 5px solid #1565c0; padding: 15px; margin-top: 10px; border-radius: 5px; font-style: italic; color: #0d47a1; }
     
+    /* Tối ưu ô ghi chú */
+    .stTextArea textarea { border: 2px solid #1565c0 !important; }
+
     audio { width: 100%; margin-bottom: 20px; border-radius: 10px; background-color: #f1f3f4; }
     @media (max-width: 768px) {
         .context-display { font-size: 19px !important; }
         .stMarkdown p { font-size: 19px !important; }
         div.stButton > button { height: 60px; font-size: 18px !important; margin-bottom: 10px; }
     }
-    img { -webkit-touch-callout: none !important; -webkit-user-select: none !important; user-select: none !important; pointer-events: none; border-radius: 8px; }
+    img { -webkit-touch-callout: none !important; user-select: none !important; pointer-events: none; border-radius: 8px; }
     </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     """, unsafe_allow_html=True)
@@ -70,25 +73,21 @@ def clean_nan(val):
 
 # --- 3. KHỞI TẠO FIREBASE ---
 if not firebase_admin._apps:
-    if "firebase" in st.secrets:
-        fb_dict = dict(st.secrets["firebase"])
-        if "private_key" in fb_dict: fb_dict["private_key"] = fb_dict["private_key"].replace("\\n", "\n")
-        cred = credentials.Certificate(fb_dict)
-    else: cred = credentials.Certificate('data/serviceAccountKey.json')
+    fb_dict = dict(st.secrets["firebase"])
+    if "private_key" in fb_dict: fb_dict["private_key"] = fb_dict["private_key"].replace("\\n", "\n")
+    cred = credentials.Certificate(fb_dict)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 4. HÀM XỬ LÝ LƯU TẠM (DRAFTS) & GHI CHÚ (NOTES) ---
+# --- 4. HÀM XỬ LÝ LƯU TẠM & GHI CHÚ ---
 def save_draft(u_account, ex_id, answers):
-    draft_id = f"{u_account}_{ex_id}"
-    db.collection('drafts').document(draft_id).set({
+    db.collection('drafts').document(f"{u_account}_{ex_id}").set({
         'answers': {str(k): v for k, v in answers.items()},
         'updated_at': firestore.SERVER_TIMESTAMP
     })
 
 def get_draft(u_account, ex_id):
-    draft_id = f"{u_account}_{ex_id}"
-    doc = db.collection('drafts').document(draft_id).get()
+    doc = db.collection('drafts').document(f"{u_account}_{ex_id}").get()
     return {int(k): v for k, v in doc.to_dict().get('answers', {}).items()} if doc.exists else {}
 
 def delete_draft(u_account, ex_id):
@@ -104,7 +103,7 @@ def get_notes(u_acc, ex_id):
     docs = db.collection('notes').where(firestore.FieldPath.document_id(), '>=', prefix).where(firestore.FieldPath.document_id(), '<=', prefix + '\uf8ff').stream()
     for doc in docs:
         gid = doc.id.replace(prefix, "")
-        notes[int(gid)] = doc.to_dict().get('content', "")
+        if gid.isdigit(): notes[int(gid)] = doc.to_dict().get('content', "")
     return notes
 
 # --- 5. QUẢN LÝ SESSION ---
@@ -132,7 +131,7 @@ def start_review_direct_callback(ex, history):
     try:
         df = pd.read_excel(get_drive_url(ex['excel_link']))
         df.columns = [str(c).strip().lower() for c in df.columns]
-        st.session_state.current_df = df
+        st.session_state.current_df, st.session_state.current_ex_info = df, ex
         latest_sub = max(history, key=lambda x: x['submitted_at'])
         st.session_state.user_answers = {int(k): v for k, v in latest_sub.get('user_answers', {}).items()}
         st.session_state.user_notes = get_notes(st.session_state.user['account'], ex.get('id', 'temp'))
@@ -225,18 +224,18 @@ def teacher_page():
                                 mapping = {clean_nan(row.get('opt_a')):'A', clean_nan(row.get('opt_b')):'B', clean_nan(row.get('opt_c')):'C', clean_nan(row.get('opt_d')):'D'}
                                 if mapping.get(ans_dict.get(str(i))) != ck: wrong_stats[i].add(all_users.get(acc, acc))
                     if summary:
-                        df_s, max_possible = pd.DataFrame(summary), len(df_ex) * 5
-                        st.markdown(f"#### 📊 Thống kê điểm số (Tối đa: {max_possible} điểm)")
+                        df_s, max_p = pd.DataFrame(summary), len(df_ex) * 5
+                        st.markdown(f"#### 📊 Thống kê điểm (Max: {max_p})")
                         c_l, c_h = st.columns(2)
-                        chart_low = alt.Chart(df_s).mark_bar(color='#90caf9').encode(x=alt.X('Học sinh:N', title=None), y=alt.Y('Thấp nhất:Q', scale=alt.Scale(domain=[0, max_possible]), title="Điểm")).properties(title="📉 Lần thấp nhất")
-                        chart_high = alt.Chart(df_s).mark_bar(color='#1565c0').encode(x=alt.X('Học sinh:N', title=None), y=alt.Y('Cao nhất:Q', scale=alt.Scale(domain=[0, max_possible]), title="Điểm")).properties(title="🏆 Lần cao nhất")
+                        chart_low = alt.Chart(df_s).mark_bar(color='#90caf9').encode(x=alt.X('Học sinh:N', title=None), y=alt.Y('Thấp nhất:Q', scale=alt.Scale(domain=[0, max_p]), title="Điểm")).properties(title="📉 Lần thấp nhất")
+                        chart_high = alt.Chart(df_s).mark_bar(color='#1565c0').encode(x=alt.X('Học sinh:N', title=None), y=alt.Y('Cao nhất:Q', scale=alt.Scale(domain=[0, max_p]), title="Điểm")).properties(title="🏆 Lần cao nhất")
                         c_l.altair_chart(chart_low, use_container_width=True); c_h.altair_chart(chart_high, use_container_width=True)
                         st.markdown("#### 🎯 Phân tích chi tiết câu sai")
                         cl, cr = st.columns([1, 1.5])
-                        q_errs = sorted([(i, len(ems)) for i, ems in wrong_stats.items() if len(ems) > 0], key=lambda x: x[1], reverse=True)
+                        q_errs = sorted([(i, len(ems)) for i, ems in wrong_stats.items() if ems], key=lambda x: x[1], reverse=True)
                         if q_errs:
                             with cl:
-                                sq = st.radio("Câu hỏi:", [f"Câu {i+1} ({c} bạn sai)" for i, c in q_errs], label_visibility="collapsed")
+                                sq = st.radio("Câu:", [f"Câu {i+1} ({c} bạn sai)" for i, c in q_errs], label_visibility="collapsed")
                                 idx = int(sq.split(" ")[1]) - 1
                             with cr:
                                 r = df_ex.iloc[idx]
@@ -270,8 +269,8 @@ def student_page():
             if hasattr(created_at, 'timestamp'): created_at = created_at.replace(tzinfo=None)
             ex_list.append({'data': ex_data, 'id': ex_id, 'history': history, 'is_done': is_done, 'has_draft': has_draft, 'created_at': created_at})
 
-        sort_option = st.selectbox("Sắp xếp theo:", ["Mới nhất", "Ưu tiên chưa làm"], label_visibility="collapsed")
-        if sort_option == "Mới nhất": ex_list.sort(key=lambda x: x['created_at'], reverse=True)
+        sort_opt = st.selectbox("Sắp xếp:", ["Mới nhất", "Ưu tiên chưa làm"], label_visibility="collapsed")
+        if sort_opt == "Mới nhất": ex_list.sort(key=lambda x: x['created_at'], reverse=True)
         else: ex_list.sort(key=lambda x: (x['is_done'], -x['created_at'].timestamp() if hasattr(x['created_at'], 'timestamp') else 0))
 
         for item in ex_list:
@@ -281,11 +280,11 @@ def student_page():
                 with c1:
                     st.subheader(f"{ex['type']} - {ex['title']}")
                     date_str = item['created_at'].strftime("%d/%m/%Y") if item['created_at'] != datetime.min else "N/A"
-                    if item['has_draft'] and not item['is_done']: st.warning(f"📅 Giao ngày: `{date_str}` | 🟠 *Đang làm dở - Hệ thống đã lưu bài*")
+                    if item['has_draft'] and not item['is_done']: st.warning(f"📅 Giao: `{date_str}` | 🟠 *Đang làm dở - Hệ thống đã lưu bài*")
                     elif history:
                         scs = [int(s.get('score_raw','0/0').split('/')[0]) for s in history]
-                        st.markdown(f"📅 Giao ngày: `{date_str}` | 🔢 Lần làm: `{len(history)}` | 📉 Thấp nhất: `{min(scs)*5}đ` | 🏆 Cao nhất: `{max(scs)*5}đ` / {int(history[0].get('score_raw','').split('/')[-1])*5}đ")
-                    else: st.markdown(f"📅 Giao ngày: `{date_str}` | 🆕 **Chưa làm**")
+                        st.markdown(f"📅 Giao: `{date_str}` | 🔢 Lần làm: `{len(history)}` | 📉 Thấp nhất: `{min(scs)*5}đ` | 🏆 Cao nhất: `{max(scs)*5}đ` / {int(history[0].get('score_raw','').split('/')[-1])*5}đ")
+                    else: st.markdown(f"📅 Giao: `{date_str}` | 🆕 **Chưa làm**")
                 with c2:
                     st.button("Làm bài ➔", key=f"btn_{ex_id}", on_click=start_lesson_callback, args=(ex, ex_id), use_container_width=True)
                     if history and ex.get('review_permissions', {}).get(u_acc, False):
@@ -293,7 +292,7 @@ def student_page():
 
     elif st.session_state.view_mode == 'quiz':
         st.subheader(f"✍️ {st.session_state.current_ex_info['title']}")
-        if st.button("⬅ Thoát (Bài làm sẽ được lưu tự động)"): st.session_state.view_mode = 'list'; st.rerun()
+        if st.button("⬅ Thoát"): st.session_state.view_mode = 'list'; st.rerun()
         df = st.session_state.current_df
         df['ctx_tmp'] = df['context'].fillna('').astype(str).str.strip()
         if 'audio' in df.columns:
@@ -308,22 +307,20 @@ def student_page():
             curr_aud = str(first.get('aud_tmp')).strip()
             if curr_aud != "" and curr_aud != last_aud: display_drive_audio(curr_aud); last_aud = curr_aud
             
+            # --- VỊ TRÍ GHI CHÚ MỚI: NGAY TRÊN CẢ CONTEXT VÀ QUESTIONS ---
+            curr_note = st.session_state.user_notes.get(g_id, "")
+            note_input = st.text_area("📝 Ghi chú / Chiến thuật cho nhóm câu hỏi này:", value=curr_note, key=f"note_{g_id}", height=150, max_chars=500, placeholder="Ghi chú lại từ vựng hoặc mẹo giải đoạn này...")
+            if note_input != curr_note:
+                st.session_state.user_notes[g_id] = note_input
+                save_note(u_acc, st.session_state.current_ex_id, g_id, note_input)
+            
             ctx = clean_nan(first.get('context'))
-            st.markdown("---")
             l, r_col = st.columns([1, 1])
             with l:
                 with st.container(height=900):
                     for p in ctx.split(";;"):
                         if p.strip().startswith("http"): display_drive_image(p.strip())
                         else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
-                    
-                    # --- PHẦN GHI CHÚ (NOTE) ---
-                    curr_note = st.session_state.user_notes.get(g_id, "")
-                    note_input = st.text_area("📝 Ghi chú của bạn:", value=curr_note, key=f"note_{g_id}", height=150, max_chars=500, placeholder="Ghi chú lại từ vựng hoặc mẹo giải đoạn này...")
-                    if note_input != curr_note:
-                        st.session_state.user_notes[g_id] = note_input
-                        save_note(u_acc, st.session_state.current_ex_id, g_id, note_input)
-            
             with r_col:
                 with st.container(height=900):
                     for i, r in group_df.iterrows():
@@ -335,6 +332,7 @@ def student_page():
                             st.session_state.user_answers[i] = sel
                             save_draft(u_acc, st.session_state.current_ex_id, st.session_state.user_answers)
                         st.write("---")
+            st.divider()
 
         if st.button("Nộp bài 🏁", use_container_width=True, type="primary"):
             correct = sum(1 for i, r in df.iterrows() if {clean_nan(r.get('opt_a')):'A', clean_nan(r.get('opt_b')):'B', clean_nan(r.get('opt_c')):'C', clean_nan(r.get('opt_d')):'D'}.get(st.session_state.user_answers.get(i)) == str(r.get('correct_ans','')).strip().upper())
@@ -364,7 +362,14 @@ def student_page():
         for g_id, group_df in df.groupby('group'):
             first = group_df.iloc[0]
             ctx, curr_aud = clean_nan(first.get('context')), str(first.get('aud_tmp')).strip()
-            st.markdown("---")
+            
+            # --- HIỂN THỊ NOTE TRONG PHẦN REVIEW (CŨNG NẰM TRÊN CÙNG) ---
+            curr_note = st.session_state.user_notes.get(g_id, "")
+            note_rev = st.text_area("📝 Ghi chú của bạn:", value=curr_note, key=f"note_rev_{g_id}", height=150, max_chars=500)
+            if note_rev != curr_note:
+                st.session_state.user_notes[g_id] = note_rev
+                save_note(u_acc, st.session_state.current_ex_info.get('id', 'temp'), g_id, note_rev)
+            
             l_rev, r_rev = st.columns([1, 1])
             with l_rev:
                 with st.container(height=900):
@@ -372,14 +377,6 @@ def student_page():
                     for p in ctx.split(";;"):
                         if p.strip().startswith("http"): display_drive_image(p.strip())
                         else: st.markdown(f'<div class="context-display">{p.strip()}</div>', unsafe_allow_html=True)
-                    
-                    # --- HIỂN THỊ NOTE TRONG PHẦN REVIEW ---
-                    curr_note = st.session_state.user_notes.get(g_id, "")
-                    note_rev = st.text_area("📝 Ghi chú của bạn:", value=curr_note, key=f"note_rev_{g_id}", height=150, max_chars=500)
-                    if note_rev != curr_note:
-                        st.session_state.user_notes[g_id] = note_rev
-                        save_note(u_acc, st.session_state.current_ex_info.get('id', 'temp'), g_id, note_rev)
-            
             with r_rev:
                 with st.container(height=900):
                     for i, r in group_df.iterrows():
@@ -388,16 +385,17 @@ def student_page():
                         opts = {'A': clean_nan(r.get('opt_a')), 'B': clean_nan(r.get('opt_b')), 'C': clean_nan(r.get('opt_c')), 'D': clean_nan(r.get('opt_d'))}
                         for let, txt in opts.items():
                             if txt == " " or (let == 'D' and txt.upper() == "NONE"): continue
-                            is_correct, is_mine = (let == ck_let), (txt == u_ans)
-                            if is_correct and is_mine: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
-                            elif is_correct and not u_ans: st.markdown(f'<div class="warning-box">⚠️ <b>{let}. {txt}</b> (Đáp án đúng - Bạn bỏ trống)</div>', unsafe_allow_html=True)
-                            elif is_correct: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
-                            elif is_mine: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
+                            is_cor, is_mi = (let == ck_let), (txt == u_ans)
+                            if is_cor and is_mi: st.markdown(f'<div class="correct-box">✅ <b>{let}. {txt}</b> (Bạn chọn đúng)</div>', unsafe_allow_html=True)
+                            elif is_cor and not u_ans: st.markdown(f'<div class="warning-box">⚠️ <b>{let}. {txt}</b> (Đáp án đúng - Bạn bỏ trống)</div>', unsafe_allow_html=True)
+                            elif is_cor: st.markdown(f'<div class="correct-box">🟢 <b>{let}. {txt}</b> (Đáp án đúng)</div>', unsafe_allow_html=True)
+                            elif is_mi: st.markdown(f'<div class="wrong-box">❌ <b>{let}. {txt}</b> (Bạn chọn sai)</div>', unsafe_allow_html=True)
                             else: st.markdown(f'<div class="normal-box">{let}. {txt}</div>', unsafe_allow_html=True)
                         if 'transcript' in df.columns:
                             ts = clean_nan(r.get('transcript'))
                             if ts != " ": st.markdown(f'<div class="transcript-box">📝 <b>Transcript:</b><br>{ts}</div>', unsafe_allow_html=True)
                         st.write("---")
+            st.divider()
         st.button("XONG", on_click=lambda: st.session_state.update({"view_mode":"list"}), use_container_width=True)
 
 # --- 7. ĐIỀU HƯỚNG ---
